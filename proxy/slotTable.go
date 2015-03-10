@@ -3,9 +3,10 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"strings"
+
 	log "github.com/Sirupsen/logrus"
 	"github.com/walu/resp"
-	"strings"
 )
 
 const (

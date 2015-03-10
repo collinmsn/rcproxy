@@ -12,6 +12,6 @@ if [ "$?" = 0 ]; then
     make gotest
     exit 0
 else
-    echo "godep is not found"
-    exit -1
+    echo "godep is not found, @see https://github.com/tools/godep"
+    exit 1
 fi

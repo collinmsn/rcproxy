@@ -3,12 +3,13 @@ package proxy
 import (
 	"bufio"
 	"bytes"
-	log "github.com/Sirupsen/logrus"
-	"github.com/walu/resp"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
+
+	log "github.com/Sirupsen/logrus"
+	"github.com/walu/resp"
 )
 
 var (

@@ -1,8 +1,9 @@
 package proxy
 
 import (
-	"github.com/walu/resp"
 	"sync"
+
+	"github.com/walu/resp"
 )
 
 type PipelineRequest struct {

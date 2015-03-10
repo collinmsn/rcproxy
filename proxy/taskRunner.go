@@ -2,10 +2,11 @@ package proxy
 
 import (
 	"container/list"
-	log "github.com/Sirupsen/logrus"
-	"github.com/walu/resp"
 	"net"
 	"time"
+
+	log "github.com/Sirupsen/logrus"
+	"github.com/walu/resp"
 )
 
 // TaskRunner assure every request will be responded

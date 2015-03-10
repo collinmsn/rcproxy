@@ -1,11 +1,12 @@
 package proxy
 
 import (
-	log "github.com/Sirupsen/logrus"
-	pool "gopkg.in/fatih/pool.v2"
 	"net"
 	"sync"
 	"time"
+
+	log "github.com/Sirupsen/logrus"
+	pool "gopkg.in/fatih/pool.v2"
 )
 
 type ConnPool struct {

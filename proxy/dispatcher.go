@@ -2,9 +2,10 @@ package proxy
 
 import (
 	"errors"
+	"time"
+
 	log "github.com/Sirupsen/logrus"
 	"github.com/walu/resp"
-	"time"
 )
 
 var (

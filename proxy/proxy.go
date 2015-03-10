@@ -3,11 +3,11 @@ package proxy
 import (
 	"bufio"
 	"fmt"
-	log "github.com/Sirupsen/logrus"
 	"net"
-	"os"
 	"sync"
 	"time"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 type Proxy struct {
@@ -60,7 +60,7 @@ func (p *Proxy) Run() {
 	if err != nil {
 		log.Fatal(err)
 	} else {
-		log.Infof("proxy listens on port %d, pid %d", p.port, os.Getpid())
+		log.Infof("proxy listens on port %d", p.port)
 	}
 	defer listener.Close()
 
