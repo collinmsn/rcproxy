@@ -13,7 +13,7 @@ type PipelineRequest struct {
 }
 
 type PipelineResponse struct {
-	resp *resp.Data
-	ctx  *PipelineRequest
-	err  error
+	rsp *resp.Data
+	ctx *PipelineRequest
+	err error
 }

@@ -1,8 +1,8 @@
 package proxy
 
 import (
+	log "github.com/Sirupsen/logrus"
 	pool "gopkg.in/fatih/pool.v2"
-	"log"
 	"net"
 	"sync"
 	"time"

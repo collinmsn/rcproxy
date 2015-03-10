@@ -46,16 +46,13 @@ func main() {
 
 	startupNodes := strings.Split(config.StartupNodes, ",")
 	connPool := proxy.NewConnPool(config.BackendIdleConnections, config.ConnectTimeout)
-	slotTable := proxy.NewSlotTable(startupNodes, connPool)
-	if err := slotTable.Init(); err != nil {
+	dispatcher := proxy.NewDispatcher(startupNodes, config.SlotsReloadInterval, connPool)
+	if err := dispatcher.InitSlotTable(); err != nil {
 		log.Fatal(err)
-	} else {
-		log.Infof("init slot table successfully")
 	}
-	proxy := proxy.NewProxy(config.Port, config.ReadTimeout, slotTable, connPool)
+	proxy := proxy.NewProxy(config.Port, config.ReadTimeout, dispatcher, connPool)
 	go proxy.Run()
 	sig := <-sigChan
 	log.Infof("terminated by %#v", sig)
-	slotTable.Exit()
 	proxy.Exit()
 }
