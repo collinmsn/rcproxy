@@ -1,0 +1,26 @@
+{
+	"ImportPath": "github.com/collinmsn/rcproxy",
+	"GoVersion": "go1.3.1",
+	"Packages": [
+		"./main"
+	],
+	"Deps": [
+		{
+			"ImportPath": "github.com/Sirupsen/logrus",
+			"Comment": "v0.6.6-2-g2cea0f0",
+			"Rev": "2cea0f0d141f56fae06df5b813ec4119d1c8ccbd"
+		},
+		{
+			"ImportPath": "github.com/artyom/autoflags",
+			"Rev": "6043bc3a2dc328191cc47a19b822394f258c09dc"
+		},
+		{
+			"ImportPath": "github.com/walu/resp",
+			"Rev": "0ac3309cc62cd43a5f59632c996be6d1638cfc3a"
+		},
+		{
+			"ImportPath": "gopkg.in/fatih/pool.v2",
+			"Rev": "46cfd0bbfb747fd0c3333d221ba4e3c932cfd6dd"
+		}
+	]
+}
