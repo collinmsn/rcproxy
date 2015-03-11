@@ -35,7 +35,7 @@ func NewDispatcher(startupNodes []string, slotReloadInterval time.Duration, conn
 		startupNodes:       startupNodes,
 		slotTable:          NewSlotTable(),
 		slotReloadInterval: slotReloadInterval,
-		reqCh:              make(chan *PipelineRequest, 10000),
+		reqCh:              make(chan *PipelineRequest, 1000),
 		connPool:           connPool,
 		taskRunners:        make(map[string]*TaskRunner),
 		slotInfoChan:       make(chan interface{}),
@@ -67,9 +67,7 @@ func (d *Dispatcher) Run() {
 				log.Infof("exit dispatch loop")
 				return
 			}
-			key := req.cmd.Value(1)
-			slot := Key2Slot(key)
-			server := d.slotTable.Get(slot)
+			server := d.slotTable.Get(req.slot)
 			taskRunner, ok := d.taskRunners[server]
 			if !ok {
 				log.Infof("create task runner, server=%s", server)

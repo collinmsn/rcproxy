@@ -8,6 +8,7 @@ import (
 
 type PipelineRequest struct {
 	cmd   *resp.Command
+	slot  int
 	seq   int64
 	backQ chan *PipelineResponse
 	wg    *sync.WaitGroup

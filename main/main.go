@@ -39,12 +39,17 @@ var config = struct {
 func handleSetLogLevel(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	lvl := r.Form.Get("level")
+	w.Header().Set("Content-Type", "text/html")
+	var msg string
 	if level, err := log.ParseLevel(lvl); err != nil {
 		log.Error(err)
+		msg = fmt.Sprintf("set log level failed, err=%s\n", err)
 	} else {
 		log.SetLevel(level)
 		log.Info("set log level to ", level)
+		msg = fmt.Sprintf("set log level OK\n")
 	}
+	w.Write([]byte(msg))
 }
 
 func main() {

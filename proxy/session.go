@@ -77,8 +77,11 @@ func (s *Session) ReadLoop() {
 			continue
 		}
 		log.Debugf("%s cmd: %s", s.Conn.RemoteAddr(), cmd.Name())
+		key := cmd.Value(1)
+		slot := Key2Slot(key)
 		plReq := &PipelineRequest{
 			cmd:   cmd,
+			slot:  slot,
 			seq:   s.pipelineSeq,
 			backQ: s.backQ,
 			wg:    &sync.WaitGroup{},

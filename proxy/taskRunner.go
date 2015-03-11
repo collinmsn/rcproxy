@@ -22,8 +22,8 @@ type TaskRunner struct {
 
 func NewTaskRunner(server string, connPool *ConnPool) (*TaskRunner, error) {
 	tr := &TaskRunner{
-		in:       make(chan interface{}, 10000),
-		out:      make(chan interface{}, 10000),
+		in:       make(chan interface{}, 1000),
+		out:      make(chan interface{}, 1000),
 		server:   server,
 		connPool: connPool,
 		inflight: list.New(),
