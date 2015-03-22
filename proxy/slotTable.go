@@ -73,6 +73,5 @@ func Key2Slot(key string) int {
 		}
 	}
 	slot := CRC16(buf) % NumSlots
-	log.Debugf("key bytes=%s,slot=%d", buf, slot)
 	return int(slot)
 }

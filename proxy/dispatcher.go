@@ -8,6 +8,9 @@ import (
 	"github.com/walu/resp"
 )
 
+// dispatcher routes requests from all clients to the right backend
+// it also maintains the slot table
+
 var (
 	CLUSTER_SLOTS        []byte
 	ERR_ALL_NODES_FAILED = errors.New("all startup nodes are failed to get cluster slots")
@@ -35,7 +38,7 @@ func NewDispatcher(startupNodes []string, slotReloadInterval time.Duration, conn
 		startupNodes:       startupNodes,
 		slotTable:          NewSlotTable(),
 		slotReloadInterval: slotReloadInterval,
-		reqCh:              make(chan *PipelineRequest, 1000),
+		reqCh:              make(chan *PipelineRequest, 10000),
 		connPool:           connPool,
 		taskRunners:        make(map[string]*TaskRunner),
 		slotInfoChan:       make(chan interface{}),
@@ -56,7 +59,6 @@ func (d *Dispatcher) InitSlotTable() error {
 }
 
 func (d *Dispatcher) Run() {
-	log.Debugf("start dispatch loop")
 	var err error
 	go d.slotsReloadLoop()
 	for {
@@ -112,7 +114,7 @@ func (d *Dispatcher) Schedule(req *PipelineRequest) {
 }
 
 func (d *Dispatcher) UpdateSlotInfo(si *SlotInfo) {
-	log.Debugf("update slot info: %#v", si)
+	log.Infof("update slot info: %#v", si)
 	d.slotInfoChan <- si
 }
 
@@ -181,9 +183,7 @@ func (d *Dispatcher) doReload() ([]*SlotInfo, error) {
 func (d *Dispatcher) TriggerReloadSlots() {
 	select {
 	case d.slotReloadChan <- struct{}{}:
-		log.Debug("schedule reload")
 	default:
-		log.Debug("drop reload req")
 	}
 }
 func (d *Dispatcher) Exit() {

@@ -9,13 +9,17 @@ import (
 	"sync"
 
 	log "github.com/Sirupsen/logrus"
-	"github.com/walu/resp"
+	"github.com/collinmsn/resp"
 )
 
 var (
 	MOVED         = []byte("MOVED")
 	ASK           = []byte("ASK")
 	ASK_CMD_BYTES = []byte("+ASKING\r\n")
+)
+
+const (
+	PIPE_LEN = 16
 )
 
 type Session struct {
@@ -29,6 +33,7 @@ type Session struct {
 	closeSignal           *sync.WaitGroup
 	connPool              *ConnPool
 	dispatcher            *Dispatcher
+	rspHeap               *PipelineResponseHeap
 }
 
 func (s *Session) Run() {
@@ -45,7 +50,7 @@ func (s *Session) Run() {
 func (s *Session) WritingLoop() {
 	for {
 		select {
-		case resp, ok := <-s.backQ:
+		case rsp, ok := <-s.backQ:
 			if !ok {
 				// reader has closed backQ
 				s.Close()
@@ -53,7 +58,7 @@ func (s *Session) WritingLoop() {
 				return
 			}
 
-			if err := s.handleResp(resp); err != nil {
+			if err := s.handleResp(rsp); err != nil {
 				s.Close()
 				continue
 			}
@@ -70,13 +75,12 @@ func (s *Session) ReadLoop() {
 		}
 		if err := s.filter(cmd); err != nil {
 			rsp := &resp.Data{T: resp.T_Error, String: []byte(err.Error())}
-			plResp := &PipelineResponse{
+			plRsp := &PipelineResponse{
 				rsp: rsp,
 			}
-			s.backQ <- plResp
+			s.backQ <- plRsp
 			continue
 		}
-		log.Debugf("%s cmd: %s", s.Conn.RemoteAddr(), cmd.Name())
 		key := cmd.Value(1)
 		slot := Key2Slot(key)
 		plReq := &PipelineRequest{
@@ -89,7 +93,6 @@ func (s *Session) ReadLoop() {
 		s.pipelineSeq++
 
 		plReq.wg.Add(1)
-		log.Debugf("%#v", plReq.wg)
 		s.dispatcher.Schedule(plReq)
 		plReq.wg.Wait()
 	}
@@ -102,86 +105,83 @@ func (s *Session) filter(cmd *resp.Command) error {
 	return nil
 }
 
-func (s *Session) writeResp(plResp *PipelineResponse) error {
-	buf := plResp.rsp.Format()
-	if _, err := s.w.Write(buf); err != nil {
+func (s *Session) writeResp(plRsp *PipelineResponse) error {
+	buf := plRsp.rsp.Format()
+	// write to client directly with non-buffered io
+	if _, err := s.Write(buf); err != nil {
 		log.Error(err)
 		return err
 	}
-	s.w.Flush()
+
 	return nil
 }
 
-func (s *Session) redirect(server string, plResp *PipelineResponse, ask bool) {
-	plResp.err = nil
+func (s *Session) redirect(server string, plRsp *PipelineResponse, ask bool) {
+	plRsp.err = nil
 	conn, err := s.connPool.GetConn(server)
-	defer conn.Close()
 	if err != nil {
-		plResp.err = err
+		plRsp.err = err
 		return
 	}
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
 	if ask {
 		if _, err := conn.Write(ASK_CMD_BYTES); err != nil {
-			plResp.err = err
+			plRsp.err = err
 			return
 		}
 	}
-	if _, err := conn.Write(plResp.ctx.cmd.Format()); err != nil {
-		plResp.err = err
+	if _, err := conn.Write(plRsp.ctx.cmd.Format()); err != nil {
+		plRsp.err = err
 		return
 	}
 	if ask {
-		if _, err := resp.ReadData(conn); err != nil {
-			plResp.err = err
+		if _, err := resp.ReadData(reader); err != nil {
+			plRsp.err = err
 			return
 		}
 	}
-	if data, err := resp.ReadData(conn); err != nil {
-		plResp.err = err
+	if data, err := resp.ReadData(reader); err != nil {
+		plRsp.err = err
 		return
 	} else {
-		plResp.rsp = data
+		plRsp.rsp = data
 	}
 }
 
-func (s *Session) handleResp(plResp *PipelineResponse) error {
-	if plResp.ctx.seq != s.lastUnsentResponseSeq {
+func (s *Session) handleResp(plRsp *PipelineResponse) error {
+	if plRsp.ctx.seq != s.lastUnsentResponseSeq {
 		// should never happen
-		log.Panicf("seq not match, respSeq=%d,lastUnsentRespSeq=%d", plResp.ctx.seq, s.lastUnsentResponseSeq)
+		log.Panicf("seq not match, respSeq=%d,lastUnsentRespSeq=%d", plRsp.ctx.seq, s.lastUnsentResponseSeq)
 	}
 
 	s.lastUnsentResponseSeq++
-	plResp.ctx.wg.Done()
 
-	if plResp.err != nil {
-		if nerr, ok := plResp.err.(net.Error); ok && !nerr.Temporary() {
-			log.Warnf("non temporary net work error, remote=%s,err=%#v", s.Conn.RemoteAddr(), nerr)
-			s.dispatcher.TriggerReloadSlots()
-		}
-		plResp.rsp = &resp.Data{T: resp.T_Error, String: []byte(plResp.err.Error())}
-	} else if plResp.rsp.T == resp.T_Error {
-		if bytes.HasPrefix(plResp.rsp.String, MOVED) {
-			slot, server := ParseRedirectInfo(string(plResp.rsp.String))
+	if plRsp.err != nil {
+		s.dispatcher.TriggerReloadSlots()
+		plRsp.rsp = &resp.Data{T: resp.T_Error, String: []byte(plRsp.err.Error())}
+	} else if plRsp.rsp.T == resp.T_Error {
+		if bytes.HasPrefix(plRsp.rsp.String, MOVED) {
+			slot, server := ParseRedirectInfo(string(plRsp.rsp.String))
 			s.dispatcher.UpdateSlotInfo(&SlotInfo{
 				start:  slot,
 				end:    slot,
 				master: server,
 			})
-			s.redirect(server, plResp, false)
-		} else if bytes.HasPrefix(plResp.rsp.String, ASK) {
-			_, server := ParseRedirectInfo(string(plResp.rsp.String))
-			s.redirect(server, plResp, true)
+			s.redirect(server, plRsp, false)
+		} else if bytes.HasPrefix(plRsp.rsp.String, ASK) {
+			_, server := ParseRedirectInfo(string(plRsp.rsp.String))
+			s.redirect(server, plRsp, true)
 		}
 	}
-	log.Debugf("%#v", plResp.rsp)
 
-	if plResp.err != nil {
+	if plRsp.err != nil {
 		s.w.Flush()
-		return plResp.err
+		return plRsp.err
 	}
 
 	if !s.closed {
-		if err := s.writeResp(plResp); err != nil {
+		if err := s.writeResp(plRsp); err != nil {
 			return err
 		}
 	}
@@ -212,8 +212,4 @@ func ParseRedirectInfo(msg string) (slot int, server string) {
 
 func (s *Session) Read(p []byte) (int, error) {
 	return s.r.Read(p)
-}
-
-func (s *Session) Write(p []byte) (int, error) {
-	return s.w.Write(p)
 }

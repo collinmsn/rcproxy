@@ -1,12 +1,13 @@
 package proxy
 
 import (
+	"bufio"
 	"container/list"
 	"net"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
-	"github.com/walu/resp"
+	"github.com/collinmsn/resp"
 )
 
 // TaskRunner assure every request will be responded
@@ -16,6 +17,8 @@ type TaskRunner struct {
 	inflight *list.List
 	server   string
 	conn     net.Conn
+	r        *bufio.Reader
+	w        *bufio.Writer
 	connPool *ConnPool
 	closed   bool
 }
@@ -24,15 +27,17 @@ func NewTaskRunner(server string, connPool *ConnPool) (*TaskRunner, error) {
 	tr := &TaskRunner{
 		in:       make(chan interface{}, 1000),
 		out:      make(chan interface{}, 1000),
+		inflight: list.New(),
 		server:   server,
 		connPool: connPool,
-		inflight: list.New(),
 	}
 
 	if conn, err := connPool.GetConn(server); err != nil {
 		return nil, err
 	} else {
 		tr.conn = conn
+		tr.r = bufio.NewReader(tr.conn)
+		tr.w = bufio.NewWriter(tr.conn)
 	}
 
 	go tr.writingLoop()
@@ -42,9 +47,8 @@ func NewTaskRunner(server string, connPool *ConnPool) (*TaskRunner, error) {
 }
 
 func (tr *TaskRunner) readingLoop() {
-	log.Debugf("begin reading loop, server=%s", tr.server)
 	for {
-		if data, err := resp.ReadData(tr.conn); err != nil {
+		if data, err := resp.ReadData(tr.r); err != nil {
 			tr.out <- err
 			log.Errorf("exit reading loop, server=%s", tr.server)
 			return
@@ -55,7 +59,6 @@ func (tr *TaskRunner) readingLoop() {
 }
 
 func (tr *TaskRunner) writingLoop() {
-	log.Debugf("begin writing loop, server=%s", tr.server)
 	var err error
 	for {
 		if tr.closed && tr.inflight.Len() == 0 {
@@ -72,8 +75,8 @@ func (tr *TaskRunner) writingLoop() {
 		select {
 		case req := <-tr.in:
 			err = tr.handleReq(req)
-		case resp := <-tr.out:
-			err = tr.handleResp(resp)
+		case rsp := <-tr.out:
+			err = tr.handleResp(rsp)
 		}
 	}
 }
@@ -96,18 +99,19 @@ func (tr *TaskRunner) handleReq(req interface{}) error {
 
 func (tr *TaskRunner) handleResp(rsp interface{}) error {
 	plReq := tr.inflight.Remove(tr.inflight.Front()).(*PipelineRequest)
-	plResp := &PipelineResponse{
+	plRsp := &PipelineResponse{
 		ctx: plReq,
 	}
 	var err error
 	switch rsp.(type) {
 	case *resp.Data:
-		plResp.rsp = rsp.(*resp.Data)
+		plRsp.rsp = rsp.(*resp.Data)
 	case error:
 		err = rsp.(error)
-		plResp.err = err
+		plRsp.err = err
 	}
-	plReq.backQ <- plResp
+	plReq.backQ <- plRsp
+	plReq.wg.Done()
 	return err
 }
 
@@ -133,11 +137,11 @@ func (tr *TaskRunner) cleanupInflight(err error) {
 	for e := tr.inflight.Front(); e != nil; {
 		plReq := e.Value.(*PipelineRequest)
 		log.Error("clean up", plReq)
-		plResp := &PipelineResponse{
+		plRsp := &PipelineResponse{
 			ctx: plReq,
 			err: err,
 		}
-		plReq.backQ <- plResp
+		plReq.backQ <- plRsp
 		next := e.Next()
 		tr.inflight.Remove(e)
 		e = next
@@ -156,12 +160,15 @@ func (tr *TaskRunner) cleanupReqQueue() {
 }
 
 func (tr *TaskRunner) writeToBackend(plReq *PipelineRequest) error {
-	log.Debugf("req=%d", plReq.seq)
 	tr.inflight.PushBack(plReq)
-	if _, err := tr.conn.Write(plReq.cmd.Format()); err != nil {
+	buf := plReq.cmd.Format()
+	if _, err := tr.w.Write(buf); err != nil {
 		log.Error(err)
 		return err
 	} else {
+		if len(tr.in) == 0 {
+			tr.w.Flush()
+		}
 		return nil
 	}
 }
