@@ -8,14 +8,16 @@ import (
 	"strings"
 	"sync"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/collinmsn/resp"
+	log "github.com/ngaut/logging"
 )
 
 var (
 	MOVED         = []byte("MOVED")
 	ASK           = []byte("ASK")
 	ASK_CMD_BYTES = []byte("+ASKING\r\n")
+	OK_BYTES      = []byte("+OK\r\n")
+	BLACK_CMD_ERR = []byte("unsupported command")
 )
 
 const (
@@ -25,7 +27,6 @@ const (
 type Session struct {
 	net.Conn
 	r                     *bufio.Reader
-	w                     *bufio.Writer
 	pipelineSeq           int64
 	lastUnsentResponseSeq int64
 	backQ                 chan *PipelineResponse
@@ -33,6 +34,7 @@ type Session struct {
 	closeSignal           *sync.WaitGroup
 	connPool              *ConnPool
 	dispatcher            *Dispatcher
+	mo                    *MultiOperator
 	rspHeap               *PipelineResponseHeap
 }
 
@@ -73,10 +75,35 @@ func (s *Session) ReadLoop() {
 			log.Error(err)
 			break
 		}
-		if err := s.filter(cmd); err != nil {
-			rsp := &resp.Data{T: resp.T_Error, String: []byte(err.Error())}
+		// will compare command name later, so convert it to upper case
+		cmd.Args[0] = strings.ToUpper(cmd.Args[0])
+
+		// check if command is supported
+		if IsBlackListCmd(cmd) {
+			plReq := &PipelineRequest{
+				seq: s.getNextSeq(),
+			}
+			rsp := &resp.Data{T: resp.T_Error, String: BLACK_CMD_ERR}
 			plRsp := &PipelineResponse{
 				rsp: rsp,
+				ctx: plReq,
+			}
+			s.backQ <- plRsp
+			continue
+		}
+		log.Info(cmd)
+
+		if yes, numKeys := IsMultiOpCmd(cmd); yes && numKeys > 1 {
+			plReq := &PipelineRequest{
+				seq: s.getNextSeq(),
+			}
+			plRsp := &PipelineResponse{
+				ctx: plReq,
+			}
+			if rsp, err := s.mo.handleMultiOp(cmd, numKeys); err != nil {
+				plRsp.rsp = &resp.Data{T: resp.T_Error, String: []byte(err.Error())}
+			} else {
+				plRsp.rsp = rsp
 			}
 			s.backQ <- plRsp
 			continue
@@ -86,11 +113,10 @@ func (s *Session) ReadLoop() {
 		plReq := &PipelineRequest{
 			cmd:   cmd,
 			slot:  slot,
-			seq:   s.pipelineSeq,
+			seq:   s.getNextSeq(),
 			backQ: s.backQ,
 			wg:    &sync.WaitGroup{},
 		}
-		s.pipelineSeq++
 
 		plReq.wg.Add(1)
 		s.dispatcher.Schedule(plReq)
@@ -99,10 +125,6 @@ func (s *Session) ReadLoop() {
 
 	close(s.backQ)
 	s.closeSignal.Wait()
-}
-
-func (s *Session) filter(cmd *resp.Command) error {
-	return nil
 }
 
 func (s *Session) writeResp(plRsp *PipelineResponse) error {
@@ -152,7 +174,7 @@ func (s *Session) redirect(server string, plRsp *PipelineResponse, ask bool) {
 func (s *Session) handleResp(plRsp *PipelineResponse) error {
 	if plRsp.ctx.seq != s.lastUnsentResponseSeq {
 		// should never happen
-		log.Panicf("seq not match, respSeq=%d,lastUnsentRespSeq=%d", plRsp.ctx.seq, s.lastUnsentResponseSeq)
+		log.Fatalf("seq not match, respSeq=%d,lastUnsentRespSeq=%d", plRsp.ctx.seq, s.lastUnsentResponseSeq)
 	}
 
 	s.lastUnsentResponseSeq++
@@ -176,7 +198,6 @@ func (s *Session) handleResp(plRsp *PipelineResponse) error {
 	}
 
 	if plRsp.err != nil {
-		s.w.Flush()
 		return plRsp.err
 	}
 
@@ -212,4 +233,10 @@ func ParseRedirectInfo(msg string) (slot int, server string) {
 
 func (s *Session) Read(p []byte) (int, error) {
 	return s.r.Read(p)
+}
+
+func (s *Session) getNextSeq() (seq int64) {
+	seq = s.pipelineSeq
+	s.pipelineSeq++
+	return
 }

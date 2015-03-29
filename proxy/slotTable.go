@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	log "github.com/Sirupsen/logrus"
-	"github.com/walu/resp"
+	"github.com/collinmsn/resp"
+	log "github.com/ngaut/logging"
 )
 
 const (
@@ -49,7 +49,7 @@ type SlotInfo struct {
 }
 
 func NewSlotInfo(data *resp.Data) (si *SlotInfo, err error) {
-	if len(data.Array) != 3 || len(data.Array[2].Array) != 2 {
+	if len(data.Array) < 3 || len(data.Array[2].Array) != 2 {
 		log.Error(data.Array)
 		return nil, ERR_INVALID_SLOT_INFO
 	}

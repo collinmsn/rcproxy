@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
+	log "github.com/ngaut/logging"
 )
 
 type Proxy struct {
@@ -17,6 +17,7 @@ type Proxy struct {
 	dispatcher        *Dispatcher
 	slotTable         *SlotTable
 	connPool          *ConnPool
+	mo                *MultiOperator
 	exitChan          chan struct{}
 }
 
@@ -27,6 +28,7 @@ func NewProxy(port int, readTimeout time.Duration, dispatcher *Dispatcher, connP
 		readTimeout:       readTimeout,
 		dispatcher:        dispatcher,
 		connPool:          connPool,
+		mo:                NewMultiOperator(port),
 		exitChan:          make(chan struct{}),
 	}
 	return p
@@ -40,10 +42,10 @@ func (p *Proxy) handleConnection(cc net.Conn) {
 	session := &Session{
 		Conn:        cc,
 		r:           bufio.NewReader(cc),
-		w:           bufio.NewWriter(cc),
 		backQ:       make(chan *PipelineResponse, 1000),
 		closeSignal: &sync.WaitGroup{},
 		connPool:    p.connPool,
+		mo:          p.mo,
 		dispatcher:  p.dispatcher,
 	}
 	session.Run()

@@ -4,8 +4,9 @@ import (
 	"errors"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
-	"github.com/walu/resp"
+	"bufio"
+	"github.com/collinmsn/resp"
+	log "github.com/ngaut/logging"
 )
 
 // dispatcher routes requests from all clients to the right backend
@@ -129,12 +130,12 @@ func (d *Dispatcher) slotsReloadLoop() {
 				log.Infof("exit reload slot table loop")
 				return
 			}
-			log.Warnf("reload slot table")
+			log.Warningf("reload slot table")
 			if slotInfos, err := d.doReload(); err != nil {
 				log.Errorf("reload slot table failed")
 				fails++
 				if fails > 3 {
-					log.Panic("reload slot table failed")
+					log.Fatalf("reload slot table failed")
 				}
 			} else {
 				fails = 0
@@ -154,12 +155,13 @@ func (d *Dispatcher) doReload() ([]*SlotInfo, error) {
 			continue
 		}
 		defer cs.Close()
+		r := bufio.NewReader(cs)
 		_, err = cs.Write(CLUSTER_SLOTS)
 		if err != nil {
 			log.Error(server, err)
 			continue
 		}
-		data, err := resp.ReadData(cs)
+		data, err := resp.ReadData(r)
 		if err != nil {
 			log.Error(err)
 			continue

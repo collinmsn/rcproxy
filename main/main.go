@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/artyom/autoflags"
 	"github.com/collinmsn/rcproxy/proxy"
+	log "github.com/ngaut/logging"
 )
 
 var config = struct {
@@ -28,7 +28,7 @@ var config = struct {
 }{
 	Port:                   8088,
 	DebugPort:              0,
-	StartupNodes:           "10.4.17.164:7001",
+	StartupNodes:           "127.0.0.1:7001",
 	ConnectTimeout:         1 * time.Second,
 	ReadTimeout:            1 * time.Second,
 	SlotsReloadInterval:    3 * time.Second,
@@ -38,18 +38,11 @@ var config = struct {
 
 func handleSetLogLevel(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
-	lvl := r.Form.Get("level")
+	level := r.Form.Get("level")
+	log.SetLevelByString(level)
+	log.Info("set log level to ", level)
 	w.Header().Set("Content-Type", "text/html")
-	var msg string
-	if level, err := log.ParseLevel(lvl); err != nil {
-		log.Error(err)
-		msg = fmt.Sprintf("set log level failed, err=%s\n", err)
-	} else {
-		log.SetLevel(level)
-		log.Info("set log level to ", level)
-		msg = fmt.Sprintf("set log level OK\n")
-	}
-	w.Write([]byte(msg))
+	w.Write([]byte("OK"))
 }
 
 func main() {
@@ -57,11 +50,7 @@ func main() {
 		log.Fatal(err)
 	}
 	flag.Parse()
-	if level, err := log.ParseLevel(config.LogLevel); err != nil {
-		log.Fatal(err)
-	} else {
-		log.SetLevel(level)
-	}
+	log.SetLevelByString(config.LogLevel)
 	log.Infof("%#v", config)
 	sigChan := make(chan os.Signal)
 	signal.Notify(sigChan, os.Interrupt, os.Kill)

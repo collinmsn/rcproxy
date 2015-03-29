@@ -6,8 +6,8 @@ import (
 	"net"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
 	"github.com/collinmsn/resp"
+	log "github.com/ngaut/logging"
 )
 
 // TaskRunner assure every request will be responded
@@ -116,7 +116,7 @@ func (tr *TaskRunner) handleResp(rsp interface{}) error {
 }
 
 func (tr *TaskRunner) tryRecover(err error) error {
-	log.Warn("try recover from ", err)
+	log.Warning("try recover from ", err)
 	tr.cleanupInflight(err)
 
 	//try to recover

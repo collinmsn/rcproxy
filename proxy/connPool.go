@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	log "github.com/Sirupsen/logrus"
-	pool "gopkg.in/fatih/pool.v2"
+	"github.com/fatih/pool"
+	log "github.com/ngaut/logging"
 )
 
 type ConnPool struct {
