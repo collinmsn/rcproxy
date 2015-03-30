@@ -91,7 +91,6 @@ func (s *Session) ReadLoop() {
 			s.backQ <- plRsp
 			continue
 		}
-		log.Info(cmd)
 
 		if yes, numKeys := IsMultiOpCmd(cmd); yes && numKeys > 1 {
 			plReq := &PipelineRequest{

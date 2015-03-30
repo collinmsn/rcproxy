@@ -85,8 +85,10 @@ func (mo *MultiOperator) mgetResults(mop *MulOp) (*resp.Data, error) {
 		return nil, err
 	}
 	defer func() {
-		log.Error(err)
-		conn.(*pool.PoolConn).MarkUnusable()
+        if err != nil {
+            log.Error(err)
+            conn.(*pool.PoolConn).MarkUnusable()
+        }
 		conn.Close()
 	}()
 
@@ -151,8 +153,10 @@ func (mo *MultiOperator) delResults(mop *MulOp) (*resp.Data, error) {
 		return nil, err
 	}
 	defer func() {
-		log.Error(err)
-		conn.(*pool.PoolConn).MarkUnusable()
+        if err != nil {
+            log.Error(err)
+            conn.(*pool.PoolConn).MarkUnusable()
+        }
 		conn.Close()
 	}()
 
@@ -198,8 +202,10 @@ func (mo *MultiOperator) msetResults(mop *MulOp) (*resp.Data, error) {
 		return nil, err
 	}
 	defer func() {
-		log.Error(err)
-		conn.(*pool.PoolConn).MarkUnusable()
+        if err != nil {
+            log.Error(err)
+            conn.(*pool.PoolConn).MarkUnusable()
+        }
 		conn.Close()
 	}()
 
@@ -207,7 +213,6 @@ func (mo *MultiOperator) msetResults(mop *MulOp) (*resp.Data, error) {
 	w := bufio.NewWriter(conn)
 	// write request
 	for i := 1; i < 1+mop.numKeys*2; i += 2 {
-		log.Info("key: %s, value: %s", string(mop.cmd.Args[i]), string(mop.cmd.Args[i+1]))
 		//change mset to set
 		if cmd, err = resp.NewCommand("SET", mop.cmd.Args[i], mop.cmd.Args[i+1]); err != nil {
 			return nil, err
