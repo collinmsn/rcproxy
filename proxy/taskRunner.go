@@ -98,6 +98,16 @@ func (tr *TaskRunner) handleReq(req interface{}) error {
 }
 
 func (tr *TaskRunner) handleResp(rsp interface{}) error {
+	if tr.inflight.Len() == 0 {
+		// this would occur when reader returned from blocking reading
+		log.Warningf("no inflight request to response, rsp=%s", rsp)
+		if err, ok := rsp.(error); ok {
+			return err
+		} else {
+			return nil
+		}
+	}
+
 	plReq := tr.inflight.Remove(tr.inflight.Front()).(*PipelineRequest)
 	plRsp := &PipelineResponse{
 		ctx: plReq,

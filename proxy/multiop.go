@@ -13,6 +13,10 @@ import (
 	"net"
 )
 
+const (
+	NUM_MULTIOP_WORKERS = 64
+)
+
 var (
 	OK_DATA *resp.Data
 )
@@ -48,7 +52,7 @@ func NewMultiOperator(port int) *MultiOperator {
 		q: make(chan *MulOp, 128),
 		p: p,
 	}
-	for i := 0; i < 1; i++ {
+	for i := 0; i < NUM_MULTIOP_WORKERS; i++ {
 		go mo.work()
 	}
 
@@ -85,10 +89,10 @@ func (mo *MultiOperator) mgetResults(mop *MulOp) (*resp.Data, error) {
 		return nil, err
 	}
 	defer func() {
-        if err != nil {
-            log.Error(err)
-            conn.(*pool.PoolConn).MarkUnusable()
-        }
+		if err != nil {
+			log.Error(err)
+			conn.(*pool.PoolConn).MarkUnusable()
+		}
 		conn.Close()
 	}()
 
@@ -153,10 +157,10 @@ func (mo *MultiOperator) delResults(mop *MulOp) (*resp.Data, error) {
 		return nil, err
 	}
 	defer func() {
-        if err != nil {
-            log.Error(err)
-            conn.(*pool.PoolConn).MarkUnusable()
-        }
+		if err != nil {
+			log.Error(err)
+			conn.(*pool.PoolConn).MarkUnusable()
+		}
 		conn.Close()
 	}()
 
@@ -202,10 +206,10 @@ func (mo *MultiOperator) msetResults(mop *MulOp) (*resp.Data, error) {
 		return nil, err
 	}
 	defer func() {
-        if err != nil {
-            log.Error(err)
-            conn.(*pool.PoolConn).MarkUnusable()
-        }
+		if err != nil {
+			log.Error(err)
+			conn.(*pool.PoolConn).MarkUnusable()
+		}
 		conn.Close()
 	}()
 

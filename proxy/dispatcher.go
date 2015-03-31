@@ -2,10 +2,12 @@ package proxy
 
 import (
 	"errors"
+	"net"
 	"time"
 
 	"bufio"
 	"github.com/collinmsn/resp"
+	"github.com/fatih/pool"
 	log "github.com/ngaut/logging"
 )
 
@@ -49,7 +51,7 @@ func NewDispatcher(startupNodes []string, slotReloadInterval time.Duration, conn
 }
 
 func (d *Dispatcher) InitSlotTable() error {
-	if slotInfos, err := d.doReload(); err != nil {
+	if slotInfos, err := d.reloadTopology(); err != nil {
 		return err
 	} else {
 		for _, si := range slotInfos {
@@ -122,7 +124,6 @@ func (d *Dispatcher) UpdateSlotInfo(si *SlotInfo) {
 // wait for the slot reload chan and reload cluster topology
 // at most every slotReloadInterval
 func (d *Dispatcher) slotsReloadLoop() {
-	var fails int
 	for {
 		select {
 		case <-time.After(d.slotReloadInterval):
@@ -130,15 +131,9 @@ func (d *Dispatcher) slotsReloadLoop() {
 				log.Infof("exit reload slot table loop")
 				return
 			}
-			log.Warningf("reload slot table")
-			if slotInfos, err := d.doReload(); err != nil {
+			if slotInfos, err := d.reloadTopology(); err != nil {
 				log.Errorf("reload slot table failed")
-				fails++
-				if fails > 3 {
-					log.Fatalf("reload slot table failed")
-				}
 			} else {
-				fails = 0
 				d.slotInfoChan <- slotInfos
 			}
 		}
@@ -147,36 +142,51 @@ func (d *Dispatcher) slotsReloadLoop() {
 
 // request "CLUSTER SLOTS" to retrieve the cluster topology
 // try each start up nodes until the first success one
-func (d *Dispatcher) doReload() ([]*SlotInfo, error) {
+func (d *Dispatcher) reloadTopology() (slotInfos []*SlotInfo, err error) {
+	log.Warningf("reload slot table")
 	for _, server := range d.startupNodes {
-		cs, err := d.connPool.GetConn(server)
-		if err != nil {
-			log.Error(server, err)
-			continue
+		if slotInfos, err = d.doReload(server); err == nil {
+			break
 		}
-		defer cs.Close()
-		r := bufio.NewReader(cs)
-		_, err = cs.Write(CLUSTER_SLOTS)
-		if err != nil {
-			log.Error(server, err)
-			continue
-		}
-		data, err := resp.ReadData(r)
-		if err != nil {
-			log.Error(err)
-			continue
-		}
-		slotInfos := make([]*SlotInfo, 0, len(data.Array))
-		for _, info := range data.Array {
-			if si, err := NewSlotInfo(info); err != nil {
-				return nil, err
-			} else {
-				slotInfos = append(slotInfos, si)
-			}
-		}
-		return slotInfos, nil
 	}
-	return nil, ERR_ALL_NODES_FAILED
+	return
+}
+
+func (d *Dispatcher) doReload(server string) (slotInfos []*SlotInfo, err error) {
+	var conn net.Conn
+	conn, err = d.connPool.GetConn(server)
+	if err != nil {
+		log.Error(server, err)
+		return
+	}
+	defer func() {
+		if err != nil {
+			conn.(*pool.PoolConn).MarkUnusable()
+		}
+		conn.Close()
+	}()
+	_, err = conn.Write(CLUSTER_SLOTS)
+	if err != nil {
+		log.Error(server, err)
+		return
+	}
+	r := bufio.NewReader(conn)
+	var data *resp.Data
+	data, err = resp.ReadData(r)
+	if err != nil {
+		log.Error(server, err)
+		return
+	}
+	var si *SlotInfo
+	slotInfos = make([]*SlotInfo, 0, len(data.Array))
+	for _, info := range data.Array {
+		if si, err = NewSlotInfo(info); err != nil {
+			return
+		} else {
+			slotInfos = append(slotInfos, si)
+		}
+	}
+	return
 }
 
 // schedule a reload task
