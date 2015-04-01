@@ -6,10 +6,10 @@
   
 ## Getting started
   * Make sure Redis 3.0.0 RC or above has been installed in your PATH. Run 'redis-server --version' to check it.
-  * Run 'python start_cluster.py' in rcproxy/tests directory to start the redis cluster
+  * Run 'python start_cluster.py' in tests directory to start the redis cluster
   * Run 'sh bootstrap.sh' in rcproxy to build rcproxy. Note that [godep](https://github.com/tools/godep) is required to solved dependencies. Otherwise, you can use go get to fetch missing packages.
   * Run 'sh start_proxy.sh' to run rcproxy. 
-  * Allmost done! Now you can play with it with redis-cli, or run loadrunner.go and random_migration.py to see how it handles slots migration properly, or run tests/bench/redis-benchmark.sh to benchmark it. 
+  * Allmost done! Now you can play with it with redis-cli, or run tests/loadrunner.go and tests/random_migration.py to see how it handles slots migration properly, or run tests/bench/redis-benchmark.sh to benchmark it. 
  
 ## Architecture
 ![](https://github.com/collinmsn/rcproxy/blob/master/rcproxy.png)
