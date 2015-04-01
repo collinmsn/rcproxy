@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import time
 from redistrib import command
 
 PORTS = [
@@ -39,6 +40,7 @@ def start_cluster():
     servers = [('127.0.0.1', port) for port in PORTS]
     half = len(servers) / 2
     command.start_cluster_on_multi(servers[0:half])
+    time.sleep(5)
     for i in range(half):
         command.replicate("127.0.0.1", PORTS[i], "127.0.0.1", PORTS[i + half])
 

@@ -10,6 +10,11 @@ import (
 	log "github.com/ngaut/logging"
 )
 
+var (
+	LogEveryN      uint32
+	accessLogCount uint32 // overflow is allowed
+)
+
 type Proxy struct {
 	port              int
 	clientIdleTimeout time.Duration

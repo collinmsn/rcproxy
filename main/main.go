@@ -24,6 +24,8 @@ var config = struct {
 	ReadTimeout            time.Duration `flag:"read-timeout, read from backend timeout"`
 	SlotsReloadInterval    time.Duration `flag:"slots-reload-interval, slots reload interval"`
 	LogLevel               string        `flag:"log-level, log level eg. debug, info, warn, error, fatal and panic"`
+	LogFile                string        `flag:"log-file, log file path"`
+	LogEveryN              uint32        `flag:"log-every-n, output an access log for every N commands"`
 	BackendIdleConnections int           `flag:"backend-idle-connections, max number of idle connections for each backend server"`
 }{
 	Port:                   8088,
@@ -33,6 +35,8 @@ var config = struct {
 	ReadTimeout:            1 * time.Second,
 	SlotsReloadInterval:    3 * time.Second,
 	LogLevel:               "info",
+	LogFile:                "rcproxy.log",
+	LogEveryN:              100,
 	BackendIdleConnections: 5,
 }
 
@@ -51,6 +55,14 @@ func main() {
 	}
 	flag.Parse()
 	log.SetLevelByString(config.LogLevel)
+	if len(config.LogFile) != 0 {
+		log.SetOutputByName(config.LogFile)
+		log.SetRotateByDay()
+	}
+	proxy.LogEveryN = config.LogEveryN
+	if proxy.LogEveryN < 1 {
+		proxy.LogEveryN = 1
+	}
 	log.Infof("%#v", config)
 	sigChan := make(chan os.Signal)
 	signal.Notify(sigChan, os.Interrupt, os.Kill)

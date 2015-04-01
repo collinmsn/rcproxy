@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/collinmsn/resp"
 	log "github.com/ngaut/logging"
@@ -74,6 +75,13 @@ func (s *Session) ReadLoop() {
 		if err != nil {
 			log.Error(err)
 			break
+		}
+		if n := atomic.AddUint32(&accessLogCount, 1); n%LogEveryN == 0 {
+			if len(cmd.Args) > 1 {
+				log.Infof("access %s %s %s", s.RemoteAddr(), cmd.Name(), cmd.Args[1])
+			} else {
+				log.Infof("access %s %s", s.RemoteAddr(), cmd.Name())
+			}
 		}
 		// will compare command name later, so convert it to upper case
 		cmd.Args[0] = strings.ToUpper(cmd.Args[0])

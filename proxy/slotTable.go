@@ -1,9 +1,9 @@
 package proxy
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/collinmsn/resp"
 	log "github.com/ngaut/logging"
@@ -67,9 +67,11 @@ func NewSlotInfo(data *resp.Data) (si *SlotInfo, err error) {
 
 func Key2Slot(key string) int {
 	buf := []byte(key)
-	if pos := strings.IndexByte(key, '{'); pos != -1 {
-		if rpos := strings.LastIndex(key, "}"); rpos > pos+1 {
-			buf = []byte(key[pos+1 : rpos])
+	if pos := bytes.IndexByte(buf, '{'); pos != -1 {
+		pos += 1
+		if pos2 := bytes.IndexByte(buf[pos:], '}'); pos2 > 0 {
+			slot := CRC16(buf[pos:pos+pos2]) % NumSlots
+			return int(slot)
 		}
 	}
 	slot := CRC16(buf) % NumSlots
