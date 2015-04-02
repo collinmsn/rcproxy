@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/collinmsn/resp"
+	"github.com/fatih/pool"
 	log "github.com/ngaut/logging"
 )
 
@@ -35,9 +36,7 @@ func NewTaskRunner(server string, connPool *ConnPool) (*TaskRunner, error) {
 	if conn, err := connPool.GetConn(server); err != nil {
 		return nil, err
 	} else {
-		tr.conn = conn
-		tr.r = bufio.NewReader(tr.conn)
-		tr.w = bufio.NewWriter(tr.conn)
+		tr.initRWConn(conn)
 	}
 
 	go tr.writingLoop()
@@ -62,6 +61,7 @@ func (tr *TaskRunner) writingLoop() {
 	var err error
 	for {
 		if tr.closed && tr.inflight.Len() == 0 {
+			tr.conn.(*pool.PoolConn).MarkUnusable()
 			tr.conn.Close()
 			log.Errorf("exit writing loop, server=%s", tr.server)
 			return
@@ -135,8 +135,9 @@ func (tr *TaskRunner) tryRecover(err error) error {
 		time.Sleep(1 * time.Second)
 		return err
 	} else {
+		tr.conn.(*pool.PoolConn).MarkUnusable()
 		tr.conn.Close()
-		tr.conn = conn
+		tr.initRWConn(conn)
 		go tr.readingLoop()
 	}
 
@@ -181,6 +182,12 @@ func (tr *TaskRunner) writeToBackend(plReq *PipelineRequest) error {
 		}
 		return nil
 	}
+}
+
+func (tr *TaskRunner) initRWConn(conn net.Conn) {
+	tr.conn = conn
+	tr.r = bufio.NewReader(tr.conn)
+	tr.w = bufio.NewWriter(tr.conn)
 }
 
 func (tr *TaskRunner) Exit() {

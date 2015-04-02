@@ -2,7 +2,7 @@ package main
 
 import (
 	"flag"
-	"fmt"
+	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -17,8 +17,8 @@ import (
 
 var config = struct {
 	//flag:"flagName,usage string"
-	Port                   int           `flag:"port, proxy serving port"`
-	DebugPort              int           `flag:"debug-port, proxy debug port for pprof and set log level, default port+1000, set it to -1 to disable debug service"`
+	Addr                   string        `flag:"addr, proxy serving addr"`
+	DebugAddr              string        `flag:"debug-addr, proxy debug listen address for pprof and set log level, default not enabled"`
 	StartupNodes           string        `flag:"startup-nodes, startup nodes used to query cluster topology"`
 	ConnectTimeout         time.Duration `flag:"connect-timeout, connect to backend timeout"`
 	ReadTimeout            time.Duration `flag:"read-timeout, read from backend timeout"`
@@ -28,8 +28,8 @@ var config = struct {
 	LogEveryN              uint32        `flag:"log-every-n, output an access log for every N commands"`
 	BackendIdleConnections int           `flag:"backend-idle-connections, max number of idle connections for each backend server"`
 }{
-	Port:                   8088,
-	DebugPort:              0,
+	Addr:                   "0.0.0.0:8088",
+	DebugAddr:              "",
 	StartupNodes:           "127.0.0.1:7001",
 	ConnectTimeout:         1 * time.Second,
 	ReadTimeout:            1 * time.Second,
@@ -60,7 +60,7 @@ func main() {
 		log.SetRotateByDay()
 	}
 	proxy.LogEveryN = config.LogEveryN
-	if proxy.LogEveryN < 1 {
+	if proxy.LogEveryN == 0 {
 		proxy.LogEveryN = 1
 	}
 	log.Infof("%#v", config)
@@ -68,25 +68,27 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, os.Kill)
 
 	log.Infof("pid %d", os.Getpid())
-	if config.DebugPort != -1 {
-		if config.DebugPort == 0 {
-			config.DebugPort = config.Port + 1000
-		}
-		debugAddr := fmt.Sprintf(":%d", config.DebugPort)
+	if len(config.DebugAddr) != 0 {
 		http.HandleFunc("/setloglevel", handleSetLogLevel)
 		go func() {
-			log.Fatal(http.ListenAndServe(debugAddr, nil))
+			log.Fatal(http.ListenAndServe(config.DebugAddr, nil))
 		}()
-		log.Infof("debug service listens on port %d", config.DebugPort)
+		log.Infof("debug service listens on %s", config.DebugAddr)
 	}
 
+	// shuffle startup nodes
 	startupNodes := strings.Split(config.StartupNodes, ",")
+	indexes := rand.Perm(len(startupNodes))
+	for i, startupNode := range startupNodes {
+		startupNodes[i] = startupNodes[indexes[i]]
+		startupNodes[indexes[i]] = startupNode
+	}
 	connPool := proxy.NewConnPool(config.BackendIdleConnections, config.ConnectTimeout)
 	dispatcher := proxy.NewDispatcher(startupNodes, config.SlotsReloadInterval, connPool)
 	if err := dispatcher.InitSlotTable(); err != nil {
 		log.Fatal(err)
 	}
-	proxy := proxy.NewProxy(config.Port, config.ReadTimeout, dispatcher, connPool)
+	proxy := proxy.NewProxy(config.Addr, config.ReadTimeout, dispatcher, connPool)
 	go proxy.Run()
 	sig := <-sigChan
 	log.Infof("terminated by %#v", sig)

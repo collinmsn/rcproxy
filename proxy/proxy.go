@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"bufio"
-	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -16,7 +15,7 @@ var (
 )
 
 type Proxy struct {
-	port              int
+	addr              string
 	clientIdleTimeout time.Duration
 	readTimeout       time.Duration
 	dispatcher        *Dispatcher
@@ -26,14 +25,14 @@ type Proxy struct {
 	exitChan          chan struct{}
 }
 
-func NewProxy(port int, readTimeout time.Duration, dispatcher *Dispatcher, connPool *ConnPool) *Proxy {
+func NewProxy(addr string, readTimeout time.Duration, dispatcher *Dispatcher, connPool *ConnPool) *Proxy {
 	p := &Proxy{
-		port:              port,
+		addr:              addr,
 		clientIdleTimeout: 120 * time.Second,
 		readTimeout:       readTimeout,
 		dispatcher:        dispatcher,
 		connPool:          connPool,
-		mo:                NewMultiOperator(port),
+		mo:                NewMultiOperator(addr),
 		exitChan:          make(chan struct{}),
 	}
 	return p
@@ -57,8 +56,7 @@ func (p *Proxy) handleConnection(cc net.Conn) {
 }
 
 func (p *Proxy) Run() {
-	addr := fmt.Sprintf("0.0.0.0:%d", p.port)
-	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
+	tcpAddr, err := net.ResolveTCPAddr("tcp", p.addr)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -67,7 +65,7 @@ func (p *Proxy) Run() {
 	if err != nil {
 		log.Fatal(err)
 	} else {
-		log.Infof("proxy listens on port %d", p.port)
+		log.Infof("proxy listens on %s", p.addr)
 	}
 	defer listener.Close()
 

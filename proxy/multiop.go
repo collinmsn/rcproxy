@@ -6,15 +6,15 @@ import (
 	"time"
 
 	"bufio"
-	"fmt"
+	"net"
+
 	"github.com/collinmsn/resp"
 	"github.com/fatih/pool"
 	log "github.com/ngaut/logging"
-	"net"
 )
 
 const (
-	NUM_MULTIOP_WORKERS = 64
+	NUM_MULTIOP_WORKERS = 128
 )
 
 var (
@@ -40,16 +40,16 @@ type MulOp struct {
 	wait    chan error
 }
 
-func NewMultiOperator(port int) *MultiOperator {
+func NewMultiOperator(addr string) *MultiOperator {
 	p, err := pool.NewChannelPool(0, 5, func() (net.Conn, error) {
-		return net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 1*time.Second)
+		return net.DialTimeout("tcp", addr, 1*time.Second)
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	mo := &MultiOperator{
-		q: make(chan *MulOp, 128),
+		q: make(chan *MulOp, NUM_MULTIOP_WORKERS),
 		p: p,
 	}
 	for i := 0; i < NUM_MULTIOP_WORKERS; i++ {

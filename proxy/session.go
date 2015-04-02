@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/fatih/pool"
+
 	"github.com/collinmsn/resp"
 	log "github.com/ngaut/logging"
 )
@@ -146,31 +148,43 @@ func (s *Session) writeResp(plRsp *PipelineResponse) error {
 }
 
 func (s *Session) redirect(server string, plRsp *PipelineResponse, ask bool) {
+	var conn net.Conn
+	var err error
+
 	plRsp.err = nil
-	conn, err := s.connPool.GetConn(server)
+	conn, err = s.connPool.GetConn(server)
 	if err != nil {
+		log.Error(err)
 		plRsp.err = err
 		return
 	}
-	defer conn.Close()
+	defer func() {
+		if err != nil {
+			log.Error(err)
+			conn.(*pool.PoolConn).MarkUnusable()
+		}
+		conn.Close()
+	}()
+
 	reader := bufio.NewReader(conn)
 	if ask {
-		if _, err := conn.Write(ASK_CMD_BYTES); err != nil {
+		if _, err = conn.Write(ASK_CMD_BYTES); err != nil {
 			plRsp.err = err
 			return
 		}
 	}
-	if _, err := conn.Write(plRsp.ctx.cmd.Format()); err != nil {
+	if _, err = conn.Write(plRsp.ctx.cmd.Format()); err != nil {
 		plRsp.err = err
 		return
 	}
 	if ask {
-		if _, err := resp.ReadData(reader); err != nil {
+		if _, err = resp.ReadData(reader); err != nil {
 			plRsp.err = err
 			return
 		}
 	}
-	if data, err := resp.ReadData(reader); err != nil {
+	var data *resp.Data
+	if data, err = resp.ReadData(reader); err != nil {
 		plRsp.err = err
 		return
 	} else {

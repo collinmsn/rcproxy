@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"bufio"
+
 	"github.com/collinmsn/resp"
 	"github.com/fatih/pool"
 	log "github.com/ngaut/logging"
