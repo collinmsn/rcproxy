@@ -232,6 +232,7 @@ func (s *Session) handleResp(plRsp *PipelineResponse) error {
 }
 
 func (s *Session) Close() {
+	log.Warningf("close session %p", s)
 	if !s.closed {
 		s.closed = true
 		s.Conn.Close()

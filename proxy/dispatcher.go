@@ -63,27 +63,21 @@ func (d *Dispatcher) InitSlotTable() error {
 }
 
 func (d *Dispatcher) Run() {
-	var err error
 	go d.slotsReloadLoop()
 	for {
 		select {
 		case req, ok := <-d.reqCh:
 			// dispatch req
 			if !ok {
-				log.Infof("exit dispatch loop")
+				log.Info("exit dispatch loop")
 				return
 			}
 			server := d.slotTable.Get(req.slot)
 			taskRunner, ok := d.taskRunners[server]
 			if !ok {
-				log.Infof("create task runner, server=%s", server)
-				taskRunner, err = NewTaskRunner(server, d.connPool)
-				if err != nil {
-					// TODO
-					log.Errorf("create task runner failed")
-				} else {
-					d.taskRunners[server] = taskRunner
-				}
+				log.Info("create task runner", server)
+				taskRunner = NewTaskRunner(server, d.connPool)
+				d.taskRunners[server] = taskRunner
 			}
 			taskRunner.in <- req
 		case info := <-d.slotInfoChan:
@@ -144,7 +138,7 @@ func (d *Dispatcher) slotsReloadLoop() {
 // request "CLUSTER SLOTS" to retrieve the cluster topology
 // try each start up nodes until the first success one
 func (d *Dispatcher) reloadTopology() (slotInfos []*SlotInfo, err error) {
-	log.Warningf("reload slot table")
+	log.Info("reload slot table")
 	for _, server := range d.startupNodes {
 		if slotInfos, err = d.doReload(server); err == nil {
 			break

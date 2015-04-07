@@ -3,12 +3,19 @@ package proxy
 import (
 	"bufio"
 	"container/list"
+	"errors"
 	"net"
 	"time"
 
 	"github.com/collinmsn/resp"
 	"github.com/fatih/pool"
 	log "github.com/ngaut/logging"
+)
+
+var (
+	initTaskRunnerConnErr = errors.New("init task runner connection error")
+	writeToBackendErr     = errors.New("write to backend error")
+	recoverFailedErr      = errors.New("try to recover from error failed")
 )
 
 // TaskRunner assure every request will be responded
@@ -24,17 +31,17 @@ type TaskRunner struct {
 	closed   bool
 }
 
-func NewTaskRunner(server string, connPool *ConnPool) (*TaskRunner, error) {
+func NewTaskRunner(server string, connPool *ConnPool) *TaskRunner {
 	tr := &TaskRunner{
-		in:       make(chan interface{}, 1000),
-		out:      make(chan interface{}, 1000),
+		in:       make(chan interface{}, 5000),
+		out:      make(chan interface{}, 5000),
 		inflight: list.New(),
 		server:   server,
 		connPool: connPool,
 	}
 
 	if conn, err := connPool.GetConn(server); err != nil {
-		return nil, err
+		log.Error(initTaskRunnerConnErr, tr.server, err)
 	} else {
 		tr.initRWConn(conn)
 	}
@@ -42,14 +49,23 @@ func NewTaskRunner(server string, connPool *ConnPool) (*TaskRunner, error) {
 	go tr.writingLoop()
 	go tr.readingLoop()
 
-	return tr, nil
+	return tr
 }
 
 func (tr *TaskRunner) readingLoop() {
+	var err error
+	var data *resp.Data
+	defer func() {
+		log.Error("exit reading loop", tr.server, err)
+	}()
+	if tr.r == nil {
+		err = initTaskRunnerConnErr
+		return
+	}
+	// reading loop
 	for {
-		if data, err := resp.ReadData(tr.r); err != nil {
+		if data, err = resp.ReadData(tr.r); err != nil {
 			tr.out <- err
-			log.Errorf("exit reading loop, server=%s", tr.server)
 			return
 		} else {
 			tr.out <- data
@@ -61,9 +77,11 @@ func (tr *TaskRunner) writingLoop() {
 	var err error
 	for {
 		if tr.closed && tr.inflight.Len() == 0 {
-			tr.conn.(*pool.PoolConn).MarkUnusable()
-			tr.conn.Close()
-			log.Errorf("exit writing loop, server=%s", tr.server)
+			if tr.conn != nil {
+				tr.conn.(*pool.PoolConn).MarkUnusable()
+				tr.conn.Close()
+			}
+			log.Error("exit writing loop", tr.server, err)
 			return
 		}
 		if err != nil {
@@ -88,10 +106,10 @@ func (tr *TaskRunner) handleReq(req interface{}) error {
 		plReq := req.(*PipelineRequest)
 		err = tr.writeToBackend(plReq)
 		if err != nil {
-			log.Errorf("write to backend failed, server=%s,err=%s", tr.server, err)
+			log.Error(writeToBackendErr, tr.server, err)
 		}
 	case struct{}:
-		log.Infof("close task runner, server=%s", tr.server)
+		log.Info("close task runner", tr.server)
 		tr.closed = true
 	}
 	return err
@@ -100,7 +118,7 @@ func (tr *TaskRunner) handleReq(req interface{}) error {
 func (tr *TaskRunner) handleResp(rsp interface{}) error {
 	if tr.inflight.Len() == 0 {
 		// this would occur when reader returned from blocking reading
-		log.Warningf("no inflight request to response, rsp=%s", rsp)
+		log.Info("no inflight requests", rsp)
 		if err, ok := rsp.(error); ok {
 			return err
 		} else {
@@ -126,17 +144,16 @@ func (tr *TaskRunner) handleResp(rsp interface{}) error {
 }
 
 func (tr *TaskRunner) tryRecover(err error) error {
-	log.Warning("try recover from ", err)
 	tr.cleanupInflight(err)
 
 	//try to recover
 	if conn, err := tr.connPool.GetConn(tr.server); err != nil {
-		log.Errorf("try to recover failed, server=%s,err=%s", tr.server, err)
-		time.Sleep(1 * time.Second)
+		tr.cleanupReqQueue()
+		log.Error(recoverFailedErr, tr.server, err)
+		time.Sleep(20 * time.Millisecond)
 		return err
 	} else {
-		tr.conn.(*pool.PoolConn).MarkUnusable()
-		tr.conn.Close()
+		log.Info("recover success", tr.server)
 		tr.initRWConn(conn)
 		go tr.readingLoop()
 	}
@@ -171,20 +188,34 @@ func (tr *TaskRunner) cleanupReqQueue() {
 }
 
 func (tr *TaskRunner) writeToBackend(plReq *PipelineRequest) error {
+	var err error
+	// always put req into inflight list first
 	tr.inflight.PushBack(plReq)
-	buf := plReq.cmd.Format()
-	if _, err := tr.w.Write(buf); err != nil {
+
+	if tr.w == nil {
+		err = initTaskRunnerConnErr
 		log.Error(err)
 		return err
-	} else {
-		if len(tr.in) == 0 {
-			tr.w.Flush()
-		}
-		return nil
 	}
+	buf := plReq.cmd.Format()
+	if _, err = tr.w.Write(buf); err != nil {
+		log.Error(err)
+		return err
+	}
+	if len(tr.in) == 0 {
+		err = tr.w.Flush()
+		if err != nil {
+			log.Error("flush error", err)
+		}
+	}
+	return err
 }
 
 func (tr *TaskRunner) initRWConn(conn net.Conn) {
+	if tr.conn != nil {
+		tr.conn.(*pool.PoolConn).MarkUnusable()
+		tr.conn.Close()
+	}
 	tr.conn = conn
 	tr.r = bufio.NewReader(tr.conn)
 	tr.w = bufio.NewWriter(tr.conn)

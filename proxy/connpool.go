@@ -29,7 +29,7 @@ func (cp *ConnPool) GetConn(server string) (net.Conn, error) {
 	var err error
 	cp.mu.Lock()
 	p := cp.pools[server]
-	// create a pool is quite cheap and will not accur many times
+	// create a pool is quite cheap and will not triggered many times
 	if p == nil {
 		p, err = pool.NewChannelPool(0, cp.maxIdle, func() (net.Conn, error) {
 			return net.DialTimeout("tcp", server, cp.connTimeout)
