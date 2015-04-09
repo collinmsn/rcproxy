@@ -15,7 +15,7 @@ type PipelineRequest struct {
 }
 
 type PipelineResponse struct {
-	rsp *resp.Data
+	rsp *resp.Object
 	ctx *PipelineRequest
 	err error
 }

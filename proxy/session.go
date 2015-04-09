@@ -16,8 +16,8 @@ import (
 )
 
 var (
-	MOVED         = []byte("MOVED")
-	ASK           = []byte("ASK")
+	MOVED         = []byte("-MOVED")
+	ASK           = []byte("-ASK")
 	ASK_CMD_BYTES = []byte("+ASKING\r\n")
 	OK_BYTES      = []byte("+OK\r\n")
 	BLACK_CMD_ERR = []byte("unsupported command")
@@ -95,7 +95,7 @@ func (s *Session) ReadLoop() {
 			}
 			rsp := &resp.Data{T: resp.T_Error, String: BLACK_CMD_ERR}
 			plRsp := &PipelineResponse{
-				rsp: rsp,
+				rsp: resp.NewObjectFromData(rsp),
 				ctx: plReq,
 			}
 			s.backQ <- plRsp
@@ -110,9 +110,9 @@ func (s *Session) ReadLoop() {
 				ctx: plReq,
 			}
 			if rsp, err := s.mo.handleMultiOp(cmd, numKeys); err != nil {
-				plRsp.rsp = &resp.Data{T: resp.T_Error, String: []byte(err.Error())}
+				plRsp.rsp = resp.NewObjectFromData(&resp.Data{T: resp.T_Error, String: []byte(err.Error())})
 			} else {
-				plRsp.rsp = rsp
+				plRsp.rsp = resp.NewObjectFromData(rsp)
 			}
 			s.backQ <- plRsp
 			continue
@@ -137,7 +137,7 @@ func (s *Session) ReadLoop() {
 }
 
 func (s *Session) writeResp(plRsp *PipelineResponse) error {
-	buf := plRsp.rsp.Format()
+	buf := plRsp.rsp.Raw()
 	// write to client directly with non-buffered io
 	if _, err := s.Write(buf); err != nil {
 		log.Error(err)
@@ -188,7 +188,7 @@ func (s *Session) redirect(server string, plRsp *PipelineResponse, ask bool) {
 		plRsp.err = err
 		return
 	} else {
-		plRsp.rsp = data
+		plRsp.rsp = resp.NewObjectFromData(data)
 	}
 }
 
@@ -202,19 +202,22 @@ func (s *Session) handleResp(plRsp *PipelineResponse) error {
 
 	if plRsp.err != nil {
 		s.dispatcher.TriggerReloadSlots()
-		plRsp.rsp = &resp.Data{T: resp.T_Error, String: []byte(plRsp.err.Error())}
-	} else if plRsp.rsp.T == resp.T_Error {
-		if bytes.HasPrefix(plRsp.rsp.String, MOVED) {
-			slot, server := ParseRedirectInfo(string(plRsp.rsp.String))
-			s.dispatcher.UpdateSlotInfo(&SlotInfo{
-				start:  slot,
-				end:    slot,
-				master: server,
-			})
-			s.redirect(server, plRsp, false)
-		} else if bytes.HasPrefix(plRsp.rsp.String, ASK) {
-			_, server := ParseRedirectInfo(string(plRsp.rsp.String))
-			s.redirect(server, plRsp, true)
+		plRsp.rsp = resp.NewObjectFromData(&resp.Data{T: resp.T_Error, String: []byte(plRsp.err.Error())})
+	} else {
+		raw := plRsp.rsp.Raw()
+		if raw[0] == resp.T_Error {
+			if bytes.HasPrefix(raw, MOVED) {
+				slot, server := ParseRedirectInfo(string(raw))
+				s.dispatcher.UpdateSlotInfo(&SlotInfo{
+					start:  slot,
+					end:    slot,
+					master: server,
+				})
+				s.redirect(server, plRsp, false)
+			} else if bytes.HasPrefix(raw, ASK) {
+				_, server := ParseRedirectInfo(string(raw))
+				s.redirect(server, plRsp, true)
+			}
 		}
 	}
 
@@ -240,7 +243,7 @@ func (s *Session) Close() {
 }
 
 func ParseRedirectInfo(msg string) (slot int, server string) {
-	parts := strings.Split(msg, " ")
+	parts := strings.Fields(msg)
 	if len(parts) != 3 {
 		log.Fatalf("invalid redirect message: %s", msg)
 	}

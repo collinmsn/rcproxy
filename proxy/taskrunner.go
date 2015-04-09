@@ -54,7 +54,6 @@ func NewTaskRunner(server string, connPool *ConnPool) *TaskRunner {
 
 func (tr *TaskRunner) readingLoop() {
 	var err error
-	var data *resp.Data
 	defer func() {
 		log.Error("exit reading loop", tr.server, err)
 	}()
@@ -64,11 +63,12 @@ func (tr *TaskRunner) readingLoop() {
 	}
 	// reading loop
 	for {
-		if data, err = resp.ReadData(tr.r); err != nil {
+		obj := resp.NewObject()
+		if err = resp.ReadDataBytes(tr.r, obj); err != nil {
 			tr.out <- err
 			return
 		} else {
-			tr.out <- data
+			tr.out <- obj
 		}
 	}
 }
@@ -132,8 +132,8 @@ func (tr *TaskRunner) handleResp(rsp interface{}) error {
 	}
 	var err error
 	switch rsp.(type) {
-	case *resp.Data:
-		plRsp.rsp = rsp.(*resp.Data)
+	case *resp.Object:
+		plRsp.rsp = rsp.(*resp.Object)
 	case error:
 		err = rsp.(error)
 		plRsp.err = err
