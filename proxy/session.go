@@ -63,7 +63,7 @@ func (s *Session) WritingLoop() {
 				return
 			}
 
-			if err := s.handleResp(rsp); err != nil {
+			if err := s.handleRespPipeline(rsp); err != nil {
 				s.Close()
 				continue
 			}
@@ -72,6 +72,7 @@ func (s *Session) WritingLoop() {
 }
 
 func (s *Session) ReadLoop() {
+	wg := &sync.WaitGroup{}
 	for {
 		cmd, err := resp.ReadCommand(s.r)
 		if err != nil {
@@ -124,13 +125,13 @@ func (s *Session) ReadLoop() {
 			slot:  slot,
 			seq:   s.getNextSeq(),
 			backQ: s.backQ,
-			wg:    &sync.WaitGroup{},
+			wg:    wg,
 		}
 
-		plReq.wg.Add(1)
+		wg.Add(1)
 		s.dispatcher.Schedule(plReq)
-		plReq.wg.Wait()
 	}
+	wg.Wait()
 
 	close(s.backQ)
 	s.closeSignal.Wait()
@@ -193,10 +194,7 @@ func (s *Session) redirect(server string, plRsp *PipelineResponse, ask bool) {
 }
 
 func (s *Session) handleResp(plRsp *PipelineResponse) error {
-	if plRsp.ctx.seq != s.lastUnsentResponseSeq {
-		// should never happen
-		log.Fatalf("seq not match, respSeq=%d,lastUnsentRespSeq=%d", plRsp.ctx.seq, s.lastUnsentResponseSeq)
-	}
+	plRsp.ctx.wg.Done()
 
 	s.lastUnsentResponseSeq++
 
@@ -231,6 +229,31 @@ func (s *Session) handleResp(plRsp *PipelineResponse) error {
 		}
 	}
 
+	return nil
+}
+
+func (s *Session) handleRespPipeline(plRsp *PipelineResponse) error {
+	if plRsp.ctx.seq != s.lastUnsentResponseSeq {
+		// the response is not come back in send order
+		s.rspHeap.Push(plRsp)
+		return nil
+	}
+	if err := s.handleResp(plRsp); err != nil {
+		return err
+	}
+	// check rsp heap
+	for {
+		if s.rspHeap.Len() == 0 {
+			return nil
+		}
+		if (*s.rspHeap)[0].ctx.seq != s.lastUnsentResponseSeq {
+			return nil
+		}
+		rsp := s.rspHeap.Pop().(*PipelineResponse)
+		if err := s.handleResp(rsp); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

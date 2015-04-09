@@ -8,10 +8,10 @@ import (
 
 type PipelineRequest struct {
 	cmd   *resp.Command
-	slot  int
-	seq   int64
+	slot  int   // key slot
+	seq   int64 // session wide request sequence number
 	backQ chan *PipelineResponse
-	wg    *sync.WaitGroup
+	wg    *sync.WaitGroup // session wide wait group
 }
 
 type PipelineResponse struct {
@@ -40,4 +40,12 @@ func (h *PipelineResponseHeap) Pop() interface{} {
 	x := old[n-1]
 	*h = old[0 : n-1]
 	return x
+}
+
+// Peek will return the heap top element
+func (h PipelineResponseHeap) Peek() *PipelineResponse {
+	if h.Len() == 0 {
+		return nil
+	}
+	return h[len(h)-1]
 }

@@ -139,7 +139,6 @@ func (tr *TaskRunner) handleResp(rsp interface{}) error {
 		plRsp.err = err
 	}
 	plReq.backQ <- plRsp
-	plReq.wg.Done()
 	return err
 }
 

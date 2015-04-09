@@ -51,6 +51,7 @@ func (p *Proxy) handleConnection(cc net.Conn) {
 		connPool:    p.connPool,
 		mo:          p.mo,
 		dispatcher:  p.dispatcher,
+		rspHeap:     &PipelineResponseHeap{},
 	}
 	session.Run()
 }
