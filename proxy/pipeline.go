@@ -43,9 +43,9 @@ func (h *PipelineResponseHeap) Pop() interface{} {
 }
 
 // Peek will return the heap top element
-func (h PipelineResponseHeap) Peek() *PipelineResponse {
+func (h PipelineResponseHeap) Top() *PipelineResponse {
 	if h.Len() == 0 {
 		return nil
 	}
-	return h[len(h)-1]
+	return h[0]
 }

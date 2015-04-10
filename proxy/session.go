@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"container/heap"
 	"net"
 	"strconv"
 	"strings"
@@ -19,39 +20,33 @@ var (
 	MOVED         = []byte("-MOVED")
 	ASK           = []byte("-ASK")
 	ASK_CMD_BYTES = []byte("+ASKING\r\n")
-	OK_BYTES      = []byte("+OK\r\n")
 	BLACK_CMD_ERR = []byte("unsupported command")
-)
-
-const (
-	PIPE_LEN = 16
 )
 
 type Session struct {
 	net.Conn
-	r                     *bufio.Reader
-	pipelineSeq           int64
-	lastUnsentResponseSeq int64
-	backQ                 chan *PipelineResponse
-	closed                bool
-	closeSignal           *sync.WaitGroup
-	connPool              *ConnPool
-	dispatcher            *Dispatcher
-	mo                    *MultiOperator
-	rspHeap               *PipelineResponseHeap
+	r           *bufio.Reader
+	reqSeq      int64
+	rspSeq      int64
+	backQ       chan *PipelineResponse
+	closed      bool
+	closeSignal *sync.WaitGroup
+	reqWg       *sync.WaitGroup
+	rspHeap     *PipelineResponseHeap
+	connPool    *ConnPool
+	dispatcher  *Dispatcher
+	mo          *MultiOperator
 }
 
 func (s *Session) Run() {
 	s.closeSignal.Add(1)
 	go s.WritingLoop()
-	s.ReadLoop()
+	s.ReadingLoop()
 }
 
-// consume backQ and send response to client
-// handle MOVE and ASK redirection
-// notify reader to exist on write failed
-// writer is responsible for close connection
-// the only way the writer can notify reader is close the writer can notify reader
+// WritingLoop consumes backQ and send response to client
+// It close the connection to notify reader on error
+// and continue loop until the reader has exited
 func (s *Session) WritingLoop() {
 	for {
 		select {
@@ -71,8 +66,7 @@ func (s *Session) WritingLoop() {
 	}
 }
 
-func (s *Session) ReadLoop() {
-	wg := &sync.WaitGroup{}
+func (s *Session) ReadingLoop() {
 	for {
 		cmd, err := resp.ReadCommand(s.r)
 		if err != nil {
@@ -92,7 +86,7 @@ func (s *Session) ReadLoop() {
 		// check if command is supported
 		if IsBlackListCmd(cmd) {
 			plReq := &PipelineRequest{
-				seq: s.getNextSeq(),
+				seq: s.getNextReqSeq(),
 			}
 			rsp := &resp.Data{T: resp.T_Error, String: BLACK_CMD_ERR}
 			plRsp := &PipelineResponse{
@@ -105,13 +99,14 @@ func (s *Session) ReadLoop() {
 
 		if yes, numKeys := IsMultiOpCmd(cmd); yes && numKeys > 1 {
 			plReq := &PipelineRequest{
-				seq: s.getNextSeq(),
+				seq: s.getNextReqSeq(),
 			}
 			plRsp := &PipelineResponse{
 				ctx: plReq,
 			}
 			if rsp, err := s.mo.handleMultiOp(cmd, numKeys); err != nil {
-				plRsp.rsp = resp.NewObjectFromData(&resp.Data{T: resp.T_Error, String: []byte(err.Error())})
+				rsp = &resp.Data{T: resp.T_Error, String: []byte(err.Error())}
+				plRsp.rsp = resp.NewObjectFromData(rsp)
 			} else {
 				plRsp.rsp = resp.NewObjectFromData(rsp)
 			}
@@ -123,16 +118,18 @@ func (s *Session) ReadLoop() {
 		plReq := &PipelineRequest{
 			cmd:   cmd,
 			slot:  slot,
-			seq:   s.getNextSeq(),
+			seq:   s.getNextReqSeq(),
 			backQ: s.backQ,
-			wg:    wg,
+			wg:    s.reqWg,
 		}
 
-		wg.Add(1)
+		s.reqWg.Add(1)
 		s.dispatcher.Schedule(plReq)
 	}
-	wg.Wait()
+	// wait for all request done
+	s.reqWg.Wait()
 
+	// notify writer
 	close(s.backQ)
 	s.closeSignal.Wait()
 }
@@ -148,6 +145,7 @@ func (s *Session) writeResp(plRsp *PipelineResponse) error {
 	return nil
 }
 
+// redirect send request to backend again to new server told by redis cluster
 func (s *Session) redirect(server string, plRsp *PipelineResponse, ask bool) {
 	var conn net.Conn
 	var err error
@@ -184,23 +182,26 @@ func (s *Session) redirect(server string, plRsp *PipelineResponse, ask bool) {
 			return
 		}
 	}
-	var data *resp.Data
-	if data, err = resp.ReadData(reader); err != nil {
+	obj := resp.NewObject()
+	if err = resp.ReadDataBytes(reader, obj); err != nil {
 		plRsp.err = err
-		return
 	} else {
-		plRsp.rsp = resp.NewObjectFromData(data)
+		plRsp.rsp = obj
 	}
 }
 
+// handleResp handles MOVED and ASK redirection and call write response
 func (s *Session) handleResp(plRsp *PipelineResponse) error {
+	if plRsp.ctx.seq != s.rspSeq {
+		panic("impossible")
+	}
 	plRsp.ctx.wg.Done()
-
-	s.lastUnsentResponseSeq++
+	s.rspSeq++
 
 	if plRsp.err != nil {
 		s.dispatcher.TriggerReloadSlots()
-		plRsp.rsp = resp.NewObjectFromData(&resp.Data{T: resp.T_Error, String: []byte(plRsp.err.Error())})
+		rsp := &resp.Data{T: resp.T_Error, String: []byte(plRsp.err.Error())}
+		plRsp.rsp = resp.NewObjectFromData(rsp)
 	} else {
 		raw := plRsp.rsp.Raw()
 		if raw[0] == resp.T_Error {
@@ -232,24 +233,24 @@ func (s *Session) handleResp(plRsp *PipelineResponse) error {
 	return nil
 }
 
+// handleRespPipeline handles the response if its sequence number is equal to session's
+// response sequence number, otherwise, put it to a heap to keep the response order is same
+// to request order
 func (s *Session) handleRespPipeline(plRsp *PipelineResponse) error {
-	if plRsp.ctx.seq != s.lastUnsentResponseSeq {
-		// the response is not come back in send order
-		s.rspHeap.Push(plRsp)
+	if plRsp.ctx.seq != s.rspSeq {
+		heap.Push(s.rspHeap, plRsp)
 		return nil
 	}
+
 	if err := s.handleResp(plRsp); err != nil {
 		return err
 	}
-	// check rsp heap
+	// continue to check the heap
 	for {
-		if s.rspHeap.Len() == 0 {
+		if rsp := s.rspHeap.Top(); rsp == nil || rsp.ctx.seq != s.rspSeq {
 			return nil
 		}
-		if (*s.rspHeap)[0].ctx.seq != s.lastUnsentResponseSeq {
-			return nil
-		}
-		rsp := s.rspHeap.Pop().(*PipelineResponse)
+		rsp := heap.Pop(s.rspHeap).(*PipelineResponse)
 		if err := s.handleResp(rsp); err != nil {
 			return err
 		}
@@ -258,33 +259,34 @@ func (s *Session) handleRespPipeline(plRsp *PipelineResponse) error {
 }
 
 func (s *Session) Close() {
-	log.Warningf("close session %p", s)
+	log.Infof("close session %p", s)
 	if !s.closed {
 		s.closed = true
 		s.Conn.Close()
 	}
 }
 
+func (s *Session) Read(p []byte) (int, error) {
+	return s.r.Read(p)
+}
+
+func (s *Session) getNextReqSeq() (seq int64) {
+	seq = s.reqSeq
+	s.reqSeq++
+	return
+}
+
+// ParseRedirectInfo parse slot redirect information from MOVED and ASK Error
 func ParseRedirectInfo(msg string) (slot int, server string) {
+	var err error
 	parts := strings.Fields(msg)
 	if len(parts) != 3 {
 		log.Fatalf("invalid redirect message: %s", msg)
 	}
-	var err error
 	slot, err = strconv.Atoi(parts[1])
 	if err != nil {
 		log.Fatalf("invalid redirect message: %s", msg)
 	}
 	server = parts[2]
-	return
-}
-
-func (s *Session) Read(p []byte) (int, error) {
-	return s.r.Read(p)
-}
-
-func (s *Session) getNextSeq() (seq int64) {
-	seq = s.pipelineSeq
-	s.pipelineSeq++
 	return
 }

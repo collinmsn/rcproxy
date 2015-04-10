@@ -48,6 +48,7 @@ func (p *Proxy) handleConnection(cc net.Conn) {
 		r:           bufio.NewReader(cc),
 		backQ:       make(chan *PipelineResponse, 1000),
 		closeSignal: &sync.WaitGroup{},
+		reqWg:       &sync.WaitGroup{},
 		connPool:    p.connPool,
 		mo:          p.mo,
 		dispatcher:  p.dispatcher,

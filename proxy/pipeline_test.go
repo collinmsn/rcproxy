@@ -24,7 +24,7 @@ func TestPipelineResponseHeap(t *testing.T) {
 		}
 	}
 	for i := 0; i < N; i++ {
-		min := h[0]
+		min := h.Top()
 		if min.ctx.seq != int64(i) {
 			t.Error("expected heap min: %d, got: %d", i, min.ctx.seq)
 		}
