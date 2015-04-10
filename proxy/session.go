@@ -87,7 +87,9 @@ func (s *Session) ReadingLoop() {
 		if IsBlackListCmd(cmd) {
 			plReq := &PipelineRequest{
 				seq: s.getNextReqSeq(),
+				wg:  s.reqWg,
 			}
+			s.reqWg.Add(1)
 			rsp := &resp.Data{T: resp.T_Error, String: BLACK_CMD_ERR}
 			plRsp := &PipelineResponse{
 				rsp: resp.NewObjectFromData(rsp),
@@ -100,7 +102,9 @@ func (s *Session) ReadingLoop() {
 		if yes, numKeys := IsMultiOpCmd(cmd); yes && numKeys > 1 {
 			plReq := &PipelineRequest{
 				seq: s.getNextReqSeq(),
+				wg:  s.reqWg,
 			}
+			s.reqWg.Add(1)
 			plRsp := &PipelineResponse{
 				ctx: plReq,
 			}
