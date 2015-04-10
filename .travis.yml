@@ -1,0 +1,10 @@
+language: go
+
+go:
+    - 1.3
+    - tip
+
+script: 
+        - ./bootstrap.sh
+        - make 
+        - make gotest
