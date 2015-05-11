@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"net"
 	"sync"
-	"time"
 
 	log "github.com/ngaut/logging"
 )
@@ -15,25 +14,21 @@ var (
 )
 
 type Proxy struct {
-	addr              string
-	clientIdleTimeout time.Duration
-	readTimeout       time.Duration
-	dispatcher        *Dispatcher
-	slotTable         *SlotTable
-	connPool          *ConnPool
-	mo                *MultiOperator
-	exitChan          chan struct{}
+	addr       string
+	dispatcher *Dispatcher
+	slotTable  *SlotTable
+	connPool   *ConnPool
+	mo         *MultiOperator
+	exitChan   chan struct{}
 }
 
-func NewProxy(addr string, readTimeout time.Duration, dispatcher *Dispatcher, connPool *ConnPool) *Proxy {
+func NewProxy(addr string, dispatcher *Dispatcher, connPool *ConnPool) *Proxy {
 	p := &Proxy{
-		addr:              addr,
-		clientIdleTimeout: 120 * time.Second,
-		readTimeout:       readTimeout,
-		dispatcher:        dispatcher,
-		connPool:          connPool,
-		mo:                NewMultiOperator(addr),
-		exitChan:          make(chan struct{}),
+		addr:       addr,
+		dispatcher: dispatcher,
+		connPool:   connPool,
+		mo:         NewMultiOperator(addr),
+		exitChan:   make(chan struct{}),
 	}
 	return p
 }

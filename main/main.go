@@ -21,7 +21,6 @@ var config = struct {
 	DebugAddr              string        `flag:"debug-addr, proxy debug listen address for pprof and set log level, default not enabled"`
 	StartupNodes           string        `flag:"startup-nodes, startup nodes used to query cluster topology"`
 	ConnectTimeout         time.Duration `flag:"connect-timeout, connect to backend timeout"`
-	ReadTimeout            time.Duration `flag:"read-timeout, read from backend timeout"`
 	SlotsReloadInterval    time.Duration `flag:"slots-reload-interval, slots reload interval"`
 	LogLevel               string        `flag:"log-level, log level eg. debug, info, warn, error, fatal and panic"`
 	LogFile                string        `flag:"log-file, log file path"`
@@ -31,8 +30,7 @@ var config = struct {
 	Addr:                   "0.0.0.0:8088",
 	DebugAddr:              "",
 	StartupNodes:           "127.0.0.1:7001",
-	ConnectTimeout:         1 * time.Second,
-	ReadTimeout:            1 * time.Second,
+	ConnectTimeout:         250 * time.Millisecond,
 	SlotsReloadInterval:    3 * time.Second,
 	LogLevel:               "info",
 	LogFile:                "rcproxy.log",
@@ -88,7 +86,7 @@ func main() {
 	if err := dispatcher.InitSlotTable(); err != nil {
 		log.Fatal(err)
 	}
-	proxy := proxy.NewProxy(config.Addr, config.ReadTimeout, dispatcher, connPool)
+	proxy := proxy.NewProxy(config.Addr, dispatcher, connPool)
 	go proxy.Run()
 	sig := <-sigChan
 	log.Infof("terminated by %#v", sig)
