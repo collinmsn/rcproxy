@@ -101,7 +101,8 @@ func (mo *MultiOperator) mgetResults(mop *MulOp) (*resp.Data, error) {
 
 	// send request
 	for _, key := range mop.cmd.Args[1:] {
-		cmd, err = resp.NewCommand("MGET", key)
+        //change mget to get
+		cmd, err = resp.NewCommand("GET", key)
 		if err != nil {
 			return nil, err
 		}
