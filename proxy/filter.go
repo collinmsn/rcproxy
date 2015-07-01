@@ -5,16 +5,66 @@ import (
 )
 
 var blackList = []string{
+	// cluster commands
 	"CLUSTER",
+	// keys commands
+	"KEYS",
+	"MIGRATE",
+	"MOVE",
+	"OBJECT",
+	"RANDOMKEY",
+	"RENAME",
+	"RENAMENX",
+	"SCAN",
+	// strings commands
+	"BITOP",
+	"MSETNX",
+	// hashes commands
+	// lists commands
+	"BLPOP",
+	"BRPOP",
+	"BRPOPLPUSH",
+	// sets commands
+	// sorted sets commands
+	// hyperloglog commands
+	// pub/sub commands
+	"PSUBSCRIBE",
+	"PUBLISH",
+	"PUNSUBSCRIBE",
+	"SUBSCRIBE",
+	"UNSUBSCRIBE",
+	// transactions commands
+	"DISCARD",
+	"EXEC",
+	"MULTI",
+	"UNWATCH",
+	"WATCH",
+	// scripting commands
+	"SCRIPT",
+	// connection commands
+	"AUTH",
+	"PING",
+	"ECHO",
+	"QUIT",
 	"SELECT",
-	"KEYS", "MOVE", "OBJECT", "RENAME", "RENAMENX", "SORT", "SCAN", "BITOP",
-	"MSETNX", "SCAN",
-	"BLPOP", "BRPOP", "BRPOPLPUSH", "PSUBSCRIBE，PUBLISH", "PUNSUBSCRIBE", "SUBSCRIBE", "RANDOMKEY",
-	"UNSUBSCRIBE", "DISCARD", "EXEC", "MULTI", "UNWATCH", "WATCH", "SCRIPT EXISTS", "SCRIPT FLUSH", "SCRIPT KILL",
-	"SCRIPT LOAD", "AUTH", "ECHO", "QUIT", "BGREWRITEAOF", "BGSAVE", "CLIENT KILL", "CLIENT LIST",
-	"CONFIG GET", "CONFIG SET", "CONFIG RESETSTAT", "DBSIZE", "DEBUG OBJECT", "DEBUG SEGFAULT", "FLUSHALL", "FLUSHDB",
-	"LASTSAVE", "MONITOR", "SAVE", "SHUTDOWN", "SLAVEOF", "SLOWLOG", "SYNC", "TIME", "SLOTSMGRTONE", "SLOTSMGRT",
-	"SLOTSDEL",
+	// server commands
+	"BGREWRITEAOF",
+	"BGSAVE",
+	"CLIENT",
+	"CONFIG",
+	"DBSIZE",
+	"DEBUG",
+	"FLUSHALL",
+	"FLUSHDB",
+	"INFO",
+	"LASTSAVE",
+	"MONITOR",
+	"SAVE",
+	"SHUTDOWN",
+	"SLAVEOF",
+	"SLOWLOG",
+	"SYNC",
+	"TIME",
 }
 
 var BlackListCmds = make(map[string]bool)
@@ -28,19 +78,4 @@ func init() {
 // filter return true if a
 func IsBlackListCmd(cmd *resp.Command) bool {
 	return BlackListCmds[cmd.Name()]
-}
-
-func IsMultiOpCmd(cmd *resp.Command) (multiKey bool, numKeys int) {
-	multiKey = true
-	switch cmd.Name() {
-	case "MGET":
-		numKeys = len(cmd.Args) - 1
-	case "MSET":
-		numKeys = (len(cmd.Args) - 1) / 2
-	case "DEL":
-		numKeys = len(cmd.Args) - 1
-	default:
-		multiKey = false
-	}
-	return
 }

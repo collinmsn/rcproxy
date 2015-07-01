@@ -4,7 +4,6 @@ import (
 	"flag"
 	"math/rand"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -24,7 +23,7 @@ var config = struct {
 	SlotsReloadInterval    time.Duration `flag:"slots-reload-interval, slots reload interval"`
 	LogLevel               string        `flag:"log-level, log level eg. debug, info, warn, error, fatal and panic"`
 	LogFile                string        `flag:"log-file, log file path"`
-	LogEveryN              uint32        `flag:"log-every-n, output an access log for every N commands"`
+	LogEveryN              int           `flag:"log-every-n, output an access log for every N commands"`
 	BackendIdleConnections int           `flag:"backend-idle-connections, max number of idle connections for each backend server"`
 }{
 	Addr:                   "0.0.0.0:8088",
@@ -57,9 +56,16 @@ func main() {
 		log.SetOutputByName(config.LogFile)
 		log.SetRotateByDay()
 	}
-	proxy.LogEveryN = config.LogEveryN
-	if proxy.LogEveryN == 0 {
+	if config.LogEveryN <= 0 {
 		proxy.LogEveryN = 1
+	} else {
+		var logEveryN interface{}
+		logEveryN = config.LogEveryN
+		if n, ok := logEveryN.(uint32); ok {
+			proxy.LogEveryN = n
+		} else {
+			panic("invalid value for param log-every-n")
+		}
 	}
 	log.Infof("%#v", config)
 	sigChan := make(chan os.Signal)

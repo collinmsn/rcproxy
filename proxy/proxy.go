@@ -18,7 +18,6 @@ type Proxy struct {
 	dispatcher *Dispatcher
 	slotTable  *SlotTable
 	connPool   *ConnPool
-	mo         *MultiOperator
 	exitChan   chan struct{}
 }
 
@@ -27,7 +26,6 @@ func NewProxy(addr string, dispatcher *Dispatcher, connPool *ConnPool) *Proxy {
 		addr:       addr,
 		dispatcher: dispatcher,
 		connPool:   connPool,
-		mo:         NewMultiOperator(addr),
 		exitChan:   make(chan struct{}),
 	}
 	return p
@@ -45,7 +43,6 @@ func (p *Proxy) handleConnection(cc net.Conn) {
 		closeSignal: &sync.WaitGroup{},
 		reqWg:       &sync.WaitGroup{},
 		connPool:    p.connPool,
-		mo:          p.mo,
 		dispatcher:  p.dispatcher,
 		rspHeap:     &PipelineResponseHeap{},
 	}

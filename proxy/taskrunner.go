@@ -149,7 +149,7 @@ func (tr *TaskRunner) tryRecover(err error) error {
 	if conn, err := tr.connPool.GetConn(tr.server); err != nil {
 		tr.cleanupReqQueue()
 		log.Error(recoverFailedErr, tr.server, err)
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 		return err
 	} else {
 		log.Info("recover success", tr.server)

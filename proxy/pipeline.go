@@ -7,11 +7,18 @@ import (
 )
 
 type PipelineRequest struct {
-	cmd   *resp.Command
-	slot  int   // key slot
-	seq   int64 // session wide request sequence number
-	backQ chan *PipelineResponse
-	wg    *sync.WaitGroup // session wide wait group
+	cmd *resp.Command
+	// key slot
+	slot int
+	// session wide request sequence number
+	seq int64
+	// sub sequence number for multi key command
+	subSeq int
+	backQ  chan *PipelineResponse
+	// session wide wait group
+	wg *sync.WaitGroup
+	// for multi key command, owner of this command
+	parentCmd *MultiKeyCmd
 }
 
 type PipelineResponse struct {

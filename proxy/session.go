@@ -35,7 +35,6 @@ type Session struct {
 	rspHeap     *PipelineResponseHeap
 	connPool    *ConnPool
 	dispatcher  *Dispatcher
-	mo          *MultiOperator
 }
 
 func (s *Session) Run() {
@@ -73,6 +72,9 @@ func (s *Session) ReadingLoop() {
 			log.Error(err)
 			break
 		}
+		// convert all command name to upper case
+		cmd.Args[0] = strings.ToUpper(cmd.Args[0])
+
 		if n := atomic.AddUint32(&accessLogCount, 1); n%LogEveryN == 0 {
 			if len(cmd.Args) > 1 {
 				log.Infof("access %s %s %s", s.RemoteAddr(), cmd.Name(), cmd.Args[1])
@@ -80,8 +82,6 @@ func (s *Session) ReadingLoop() {
 				log.Infof("access %s %s", s.RemoteAddr(), cmd.Name())
 			}
 		}
-		// will compare command name later, so convert it to upper case
-		cmd.Args[0] = strings.ToUpper(cmd.Args[0])
 
 		// check if command is supported
 		if IsBlackListCmd(cmd) {
@@ -99,24 +99,13 @@ func (s *Session) ReadingLoop() {
 			continue
 		}
 
-		if yes, numKeys := IsMultiOpCmd(cmd); yes && numKeys > 1 {
-			plReq := &PipelineRequest{
-				seq: s.getNextReqSeq(),
-				wg:  s.reqWg,
-			}
-			s.reqWg.Add(1)
-			plRsp := &PipelineResponse{
-				ctx: plReq,
-			}
-			if rsp, err := s.mo.handleMultiOp(cmd, numKeys); err != nil {
-				rsp = &resp.Data{T: resp.T_Error, String: []byte(err.Error())}
-				plRsp.rsp = resp.NewObjectFromData(rsp)
-			} else {
-				plRsp.rsp = resp.NewObjectFromData(rsp)
-			}
-			s.backQ <- plRsp
+		// check if is multi key cmd
+		if yes, numKeys := IsMultiCmd(cmd); yes && numKeys > 1 {
+			s.handleMultiKeyCmd(cmd, numKeys)
 			continue
 		}
+
+		// other general cmd
 		key := cmd.Value(1)
 		slot := Key2Slot(key)
 		plReq := &PipelineRequest{
@@ -138,8 +127,20 @@ func (s *Session) ReadingLoop() {
 	s.closeSignal.Wait()
 }
 
+// 将resp写出去。如果是multi key command，只有在全部完成后才汇总输出
 func (s *Session) writeResp(plRsp *PipelineResponse) error {
-	buf := plRsp.rsp.Raw()
+	var buf []byte
+	if parentCmd := plRsp.ctx.parentCmd; parentCmd != nil {
+		// sub request
+		parentCmd.FinishSubCmd(plRsp)
+		if !parentCmd.Finished() {
+			return nil
+		}
+		buf = parentCmd.BuildRsp().rsp.Raw()
+		s.rspSeq++
+	} else {
+		buf = plRsp.rsp.Raw()
+	}
 	// write to client directly with non-buffered io
 	if _, err := s.Write(buf); err != nil {
 		log.Error(err)
@@ -200,7 +201,9 @@ func (s *Session) handleResp(plRsp *PipelineResponse) error {
 		panic("impossible")
 	}
 	plRsp.ctx.wg.Done()
-	s.rspSeq++
+	if plRsp.ctx.parentCmd == nil {
+		s.rspSeq++
+	}
 
 	if plRsp.err != nil {
 		s.dispatcher.TriggerReloadSlots()
@@ -260,6 +263,40 @@ func (s *Session) handleRespPipeline(plRsp *PipelineResponse) error {
 		}
 	}
 	return nil
+}
+
+func (s *Session) handleMultiKeyCmd(cmd *resp.Command, numKeys int) {
+	var subCmd *resp.Command
+	var err error
+	mc := NewMultiKeyCmd(cmd, numKeys)
+	// multi sub cmd share the same seq number
+	seq := s.getNextReqSeq()
+	for i := 0; i < numKeys; i++ {
+		switch cmd.Name() {
+		case MGET:
+			subCmd, err = resp.NewCommand("GET", cmd.Value(i+1))
+		case MSET:
+			subCmd, err = resp.NewCommand("SET", cmd.Value(2*i+1), cmd.Value((2*i + 2)))
+		case DEL:
+			subCmd, err = resp.NewCommand("DEL", cmd.Value(i+1))
+		}
+		if err != nil {
+			panic(err)
+		}
+		key := subCmd.Value(1)
+		slot := Key2Slot(key)
+		plReq := &PipelineRequest{
+			cmd:       subCmd,
+			slot:      slot,
+			seq:       seq,
+			subSeq:    i,
+			backQ:     s.backQ,
+			parentCmd: mc,
+			wg:        s.reqWg,
+		}
+		s.reqWg.Add(1)
+		s.dispatcher.Schedule(plReq)
+	}
 }
 
 func (s *Session) Close() {
