@@ -4,6 +4,7 @@ import (
 	"flag"
 	"math/rand"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -52,6 +53,8 @@ func main() {
 	}
 	flag.Parse()
 	log.SetLevelByString(config.LogLevel)
+	// to avoid pprof being optimized by gofmt
+	log.Debug(pprof.Handler("profile"))
 	if len(config.LogFile) != 0 {
 		log.SetOutputByName(config.LogFile)
 		log.SetRotateByDay()
@@ -60,11 +63,11 @@ func main() {
 		proxy.LogEveryN = 1
 	} else {
 		var logEveryN interface{}
-		logEveryN = config.LogEveryN
+		logEveryN = uint32(config.LogEveryN)
 		if n, ok := logEveryN.(uint32); ok {
 			proxy.LogEveryN = n
 		} else {
-			panic("invalid value for param log-every-n")
+			log.Fatalf("invalid value for param log-every-n", config.LogEveryN)
 		}
 	}
 	log.Infof("%#v", config)
