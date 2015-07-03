@@ -24,6 +24,16 @@ func init() {
 	}
 }
 
+/*
+multi key cmd被拆分成numKeys个子请求按普通的pipeline request发送，最后在写出response时进行合并
+当最后一个子请求的response到来时，整个multi key cmd完成，拼接最终response并写出
+
+只要有一个子请求失败，都认定整个请求失败
+多个子请求共享一个request sequence number
+
+请求的失败包含两种类型：1、网络失败，比如读取超时，2，请求错误，比如本来该在A机器上，请求到了B机器上，表现为response type为error
+因为每个pipeline request都处理了redirect，所以第二种错误忽略
+*/
 type MultiKeyCmd struct {
 	cmd               *resp.Command
 	numSubCmds        int
@@ -41,7 +51,7 @@ func NewMultiKeyCmd(cmd *resp.Command, numSubCmds int) *MultiKeyCmd {
 	return mc
 }
 
-func (mc *MultiKeyCmd) FinishSubCmd(rsp *PipelineResponse) {
+func (mc *MultiKeyCmd) OnSubCmdFinished(rsp *PipelineResponse) {
 	mc.subCmdRsps[rsp.ctx.subSeq] = rsp
 	mc.numPendingSubCmds--
 }
@@ -50,20 +60,21 @@ func (mc *MultiKeyCmd) Finished() bool {
 	return mc.numPendingSubCmds == 0
 }
 
-func (mc *MultiKeyCmd) BuildRsp() *PipelineResponse {
+func (mc *MultiKeyCmd) CoalesceRsp() *PipelineResponse {
 	plRsp := &PipelineResponse{}
 	switch mc.cmd.Name() {
 	case MGET:
 		rsp := &resp.Data{T: resp.T_Array, Array: make([]*resp.Data, mc.numSubCmds)}
 		for i, subCmdRsp := range mc.subCmdRsps {
 			if subCmdRsp.err != nil {
-				rsp.Array[i] = &resp.Data{T: resp.T_BulkString, IsNil: true}
+				rsp = &resp.Data{T: resp.T_Error, String: []byte(subCmdRsp.err.Error())}
+				break
 			} else {
-				// TODO: optimize it
 				reader := bufio.NewReader(bytes.NewReader(subCmdRsp.rsp.Raw()))
 				if data, err := resp.ReadData(reader); err != nil {
-					log.Error(err)
-					rsp.Array[i] = &resp.Data{T: resp.T_BulkString, IsNil: true}
+					log.Errorf("re-parse response err=%s", err)
+					rsp = &resp.Data{T: resp.T_Error, String: []byte(err.Error())}
+					break
 				} else {
 					rsp.Array[i] = data
 				}
@@ -71,34 +82,42 @@ func (mc *MultiKeyCmd) BuildRsp() *PipelineResponse {
 		}
 		plRsp.rsp = resp.NewObjectFromData(rsp)
 	case MSET:
-		var err error
+		var cmdErr error
 		for _, subCmdRsp := range mc.subCmdRsps {
 			if subCmdRsp.err != nil {
-				err = subCmdRsp.err
+				cmdErr = subCmdRsp.err
 				break
 			}
 		}
-		if err != nil {
-			rsp := &resp.Data{T: resp.T_Error, String: []byte(err.Error())}
+		if cmdErr != nil {
+			rsp := &resp.Data{T: resp.T_Error, String: []byte(cmdErr.Error())}
 			plRsp.rsp = resp.NewObjectFromData(rsp)
 		} else {
 			plRsp.rsp = resp.NewObjectFromData(OK_DATA)
 		}
 	case DEL:
+		var cmdErr error
 		rsp := &resp.Data{T: resp.T_Integer}
 		for _, subCmdRsp := range mc.subCmdRsps {
 			if subCmdRsp.err != nil {
-				continue
+				cmdErr = subCmdRsp.err
+				break
 			}
 			reader := bufio.NewReader(bytes.NewReader(subCmdRsp.rsp.Raw()))
-			data, err := resp.ReadData(reader)
-			if err != nil {
-				log.Error(err)
+			if data, err := resp.ReadData(reader); err != nil {
+				log.Errorf("re-parse response err=%s", err)
+				cmdErr = err
+				break
 			} else {
 				rsp.Integer += data.Integer
 			}
 		}
-		plRsp.rsp = resp.NewObjectFromData(rsp)
+		if cmdErr != nil {
+			rsp = &resp.Data{T: resp.T_Error, String: []byte(cmdErr.Error())}
+			plRsp.rsp = resp.NewObjectFromData(rsp)
+		} else {
+			plRsp.rsp = resp.NewObjectFromData(rsp)
+		}
 	}
 	return plRsp
 }

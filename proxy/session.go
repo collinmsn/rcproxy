@@ -132,11 +132,11 @@ func (s *Session) writeResp(plRsp *PipelineResponse) error {
 	var buf []byte
 	if parentCmd := plRsp.ctx.parentCmd; parentCmd != nil {
 		// sub request
-		parentCmd.FinishSubCmd(plRsp)
+		parentCmd.OnSubCmdFinished(plRsp)
 		if !parentCmd.Finished() {
 			return nil
 		}
-		buf = parentCmd.BuildRsp().rsp.Raw()
+		buf = parentCmd.CoalesceRsp().rsp.Raw()
 		s.rspSeq++
 	} else {
 		buf = plRsp.rsp.Raw()
