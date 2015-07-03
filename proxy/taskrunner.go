@@ -18,6 +18,37 @@ var (
 	recoverFailedErr      = errors.New("try to recover from error failed")
 )
 
+const (
+	TASK_CHANNEL_SIZE = 50000
+)
+
+/*
+dispatcher------put req-------tr.in
+tr.writer-------consume-------tr.in
+                add to--------inflight
+                write to------backend
+
+tr.writer-------consume-------tr.out
+                remove from---inflight
+                put to--------backQ
+
+tr.reader-------read from-----backend
+                produce-------tr.out
+
+
+为了保证request-response不会错匹配
+1、读出错:
+向tr.out<-error, 通知writer, 退出reader
+writer处理到tr.out中的error时，进行recover
+2、写出错：
+进行recover
+
+recover时，要
+1、消费tr.in，使其不会阻塞
+2、对所有request进行response
+3、重置tr.out，起新的reader，关掉旧的backend connection让原来的reader退出
+
+*/
 // TaskRunner assure every request will be responded
 type TaskRunner struct {
 	in       chan interface{}
@@ -33,42 +64,45 @@ type TaskRunner struct {
 
 func NewTaskRunner(server string, connPool *ConnPool) *TaskRunner {
 	tr := &TaskRunner{
-		in:       make(chan interface{}, 5000),
-		out:      make(chan interface{}, 5000),
+		in:       make(chan interface{}, TASK_CHANNEL_SIZE),
+		out:      make(chan interface{}, TASK_CHANNEL_SIZE),
 		inflight: list.New(),
 		server:   server,
 		connPool: connPool,
 	}
 
 	if conn, err := connPool.GetConn(server); err != nil {
-		log.Error(initTaskRunnerConnErr, tr.server, err)
+		log.Error(tr.server, err)
 	} else {
 		tr.initRWConn(conn)
 	}
 
 	go tr.writingLoop()
-	go tr.readingLoop()
+	go tr.readingLoop(tr.out)
 
 	return tr
 }
 
-func (tr *TaskRunner) readingLoop() {
+func (tr *TaskRunner) readingLoop(out chan interface{}) {
 	var err error
 	defer func() {
 		log.Error("exit reading loop", tr.server, err)
+		close(out)
 	}()
+
 	if tr.r == nil {
 		err = initTaskRunnerConnErr
+		out <- err
 		return
 	}
 	// reading loop
 	for {
 		obj := resp.NewObject()
 		if err = resp.ReadDataBytes(tr.r, obj); err != nil {
-			tr.out <- err
+			out <- err
 			return
 		} else {
-			tr.out <- obj
+			out <- obj
 		}
 	}
 }
@@ -77,6 +111,7 @@ func (tr *TaskRunner) writingLoop() {
 	var err error
 	for {
 		if tr.closed && tr.inflight.Len() == 0 {
+			// in queue和out queue都已经空了，writing loop可以退出了
 			if tr.conn != nil {
 				tr.conn.(*pool.PoolConn).MarkUnusable()
 				tr.conn.Close()
@@ -93,8 +128,10 @@ func (tr *TaskRunner) writingLoop() {
 		select {
 		case req := <-tr.in:
 			err = tr.handleReq(req)
-		case rsp := <-tr.out:
-			err = tr.handleResp(rsp)
+		case rsp, ok := <-tr.out:
+			if ok {
+				err = tr.handleResp(rsp)
+			}
 		}
 	}
 }
@@ -154,7 +191,8 @@ func (tr *TaskRunner) tryRecover(err error) error {
 	} else {
 		log.Info("recover success", tr.server)
 		tr.initRWConn(conn)
-		go tr.readingLoop()
+		tr.resetOutChannel()
+		go tr.readingLoop(tr.out)
 	}
 
 	return nil
@@ -218,6 +256,10 @@ func (tr *TaskRunner) initRWConn(conn net.Conn) {
 	tr.conn = conn
 	tr.r = bufio.NewReader(tr.conn)
 	tr.w = bufio.NewWriter(tr.conn)
+}
+
+func (tr *TaskRunner) resetOutChannel() {
+	tr.out = make(chan interface{}, TASK_CHANNEL_SIZE)
 }
 
 func (tr *TaskRunner) Exit() {
