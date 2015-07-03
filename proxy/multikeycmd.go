@@ -8,9 +8,9 @@ import (
 )
 
 const (
-	MGET = "MGET"
-	MSET = "MSET"
-	DEL  = "DEL"
+	MGET = iota
+	MSET
+	DEL
 )
 
 var (
@@ -32,10 +32,10 @@ multi key cmd被拆分成numKeys个子请求按普通的pipeline request发送�
 多个子请求共享一个request sequence number
 
 请求的失败包含两种类型：1、网络失败，比如读取超时，2，请求错误，比如本来该在A机器上，请求到了B机器上，表现为response type为error
-因为每个pipeline request都处理了redirect，所以第二种错误忽略
 */
 type MultiKeyCmd struct {
 	cmd               *resp.Command
+	cmdType           int
 	numSubCmds        int
 	numPendingSubCmds int
 	subCmdRsps        []*PipelineResponse
@@ -46,6 +46,16 @@ func NewMultiKeyCmd(cmd *resp.Command, numSubCmds int) *MultiKeyCmd {
 		cmd:               cmd,
 		numSubCmds:        numSubCmds,
 		numPendingSubCmds: numSubCmds,
+	}
+	switch cmd.Name() {
+	case "MGET":
+		mc.cmdType = MGET
+	case "MSET":
+		mc.cmdType = MSET
+	case "DEL":
+		mc.cmdType = DEL
+	default:
+		panic("not multi key command")
 	}
 	mc.subCmdRsps = make([]*PipelineResponse, numSubCmds)
 	return mc
@@ -62,74 +72,59 @@ func (mc *MultiKeyCmd) Finished() bool {
 
 func (mc *MultiKeyCmd) CoalesceRsp() *PipelineResponse {
 	plRsp := &PipelineResponse{}
-	switch mc.cmd.Name() {
+	var rsp *resp.Data
+	switch mc.CmdType() {
 	case MGET:
-		rsp := &resp.Data{T: resp.T_Array, Array: make([]*resp.Data, mc.numSubCmds)}
-		for i, subCmdRsp := range mc.subCmdRsps {
-			if subCmdRsp.err != nil {
-				rsp = &resp.Data{T: resp.T_Error, String: []byte(subCmdRsp.err.Error())}
-				break
-			} else {
-				reader := bufio.NewReader(bytes.NewReader(subCmdRsp.rsp.Raw()))
-				if data, err := resp.ReadData(reader); err != nil {
-					log.Errorf("re-parse response err=%s", err)
-					rsp = &resp.Data{T: resp.T_Error, String: []byte(err.Error())}
-					break
-				} else {
-					rsp.Array[i] = data
-				}
-			}
-		}
-		plRsp.rsp = resp.NewObjectFromData(rsp)
+		rsp = &resp.Data{T: resp.T_Array, Array: make([]*resp.Data, mc.numSubCmds)}
 	case MSET:
-		var cmdErr error
-		for _, subCmdRsp := range mc.subCmdRsps {
-			if subCmdRsp.err != nil {
-				cmdErr = subCmdRsp.err
-				break
-			}
-		}
-		if cmdErr != nil {
-			rsp := &resp.Data{T: resp.T_Error, String: []byte(cmdErr.Error())}
-			plRsp.rsp = resp.NewObjectFromData(rsp)
-		} else {
-			plRsp.rsp = resp.NewObjectFromData(OK_DATA)
-		}
+		rsp = OK_DATA
 	case DEL:
-		var cmdErr error
-		rsp := &resp.Data{T: resp.T_Integer}
-		for _, subCmdRsp := range mc.subCmdRsps {
-			if subCmdRsp.err != nil {
-				cmdErr = subCmdRsp.err
-				break
-			}
-			reader := bufio.NewReader(bytes.NewReader(subCmdRsp.rsp.Raw()))
-			if data, err := resp.ReadData(reader); err != nil {
-				log.Errorf("re-parse response err=%s", err)
-				cmdErr = err
-				break
-			} else {
-				rsp.Integer += data.Integer
-			}
+		rsp = &resp.Data{T: resp.T_Integer}
+	default:
+		panic("invalid multi key cmd name")
+	}
+	for i, subCmdRsp := range mc.subCmdRsps {
+		if subCmdRsp.err != nil {
+			rsp = &resp.Data{T: resp.T_Error, String: []byte(subCmdRsp.err.Error())}
+			break
 		}
-		if cmdErr != nil {
-			rsp = &resp.Data{T: resp.T_Error, String: []byte(cmdErr.Error())}
-			plRsp.rsp = resp.NewObjectFromData(rsp)
-		} else {
-			plRsp.rsp = resp.NewObjectFromData(rsp)
+		reader := bufio.NewReader(bytes.NewReader(subCmdRsp.rsp.Raw()))
+		data, err := resp.ReadData(reader)
+		if err != nil {
+			log.Errorf("re-parse response err=%s", err)
+			rsp = &resp.Data{T: resp.T_Error, String: []byte(err.Error())}
+			break
+		}
+		if data.T == resp.T_Error {
+			rsp = data
+			break
+		}
+		switch mc.CmdType() {
+		case MGET:
+			rsp.Array[i] = data
+		case MSET:
+		case DEL:
+			rsp.Integer += data.Integer
+		default:
+			panic("invalid multi key cmd name")
 		}
 	}
+	plRsp.rsp = resp.NewObjectFromData(rsp)
 	return plRsp
+}
+
+func (mc *MultiKeyCmd) CmdType() int {
+	return mc.cmdType
 }
 
 func IsMultiCmd(cmd *resp.Command) (multiKey bool, numKeys int) {
 	multiKey = true
 	switch cmd.Name() {
-	case MGET:
+	case "MGET":
 		numKeys = len(cmd.Args) - 1
-	case MSET:
+	case "MSET":
 		numKeys = (len(cmd.Args) - 1) / 2
-	case DEL:
+	case "DEL":
 		numKeys = len(cmd.Args) - 1
 	default:
 		multiKey = false

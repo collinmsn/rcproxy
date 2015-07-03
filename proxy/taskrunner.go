@@ -24,6 +24,7 @@ const (
 
 /*
 dispatcher------put req-------tr.in
+
 tr.writer-------consume-------tr.in
                 add to--------inflight
                 write to------backend
@@ -116,6 +117,7 @@ func (tr *TaskRunner) writingLoop() {
 				tr.conn.(*pool.PoolConn).MarkUnusable()
 				tr.conn.Close()
 			}
+			close(tr.in)
 			log.Error("exit writing loop", tr.server, err)
 			return
 		}

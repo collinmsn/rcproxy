@@ -272,7 +272,7 @@ func (s *Session) handleMultiKeyCmd(cmd *resp.Command, numKeys int) {
 	// multi sub cmd share the same seq number
 	seq := s.getNextReqSeq()
 	for i := 0; i < numKeys; i++ {
-		switch cmd.Name() {
+		switch mc.CmdType() {
 		case MGET:
 			subCmd, err = resp.NewCommand("GET", cmd.Value(i+1))
 		case MSET:
