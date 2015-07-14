@@ -21,7 +21,7 @@
   Benchmark it with tests/bench/redis-benchmark.sh
   
 ## Status
-  * Product ready
+  Product ready
   
 ## Feedback
   Feedbacks and bug reports are highly appreciated. Contact me by 4130944@qq.com
