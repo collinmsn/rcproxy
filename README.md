@@ -20,10 +20,8 @@
 ## Performance
   Benchmark it with tests/bench/redis-benchmark.sh
   
-## Roadmap
-  * Fully tests
-  * Resp protocol optimization
-  * Metrics
+## Status
+  * Product ready
   
 ## Feedback
   Feedbacks and bug reports are highly appreciated. Contact me by 4130944@qq.com
