@@ -22,42 +22,43 @@ def encode(value, encoding='utf-8'):
     return value
 
 
-def pack_command(command, *args):
+def squash_commands(commands):
     output = []
-    if ' ' in command:
-        args = tuple([s for s in command.split(' ')]) + args
-    else:
-        args = (command,) + args
+    buf = ''
 
-    buff = SYM_EMPTY.join((SYM_STAR, str(len(args)), SYM_CRLF))
+    for c in commands:
+        buf = SYM_EMPTY.join((buf, SYM_STAR, str(len(c)), SYM_CRLF))
 
-    for arg in map(encode, args):
-        if len(buff) > 6000 or len(arg) > 6000:
-            buff = SYM_EMPTY.join((buff, SYM_DOLLAR, str(len(arg)), SYM_CRLF))
-            output.append(buff)
-            output.append(arg)
-            buff = SYM_CRLF
-        else:
-            buff = SYM_EMPTY.join((buff, SYM_DOLLAR, str(len(arg)),
-                                   SYM_CRLF, arg, SYM_CRLF))
-    output.append(buff)
+        for arg in map(encode, c):
+            if len(buf) > 6000 or len(arg) > 6000:
+                output.append(SYM_EMPTY.join((buf, SYM_DOLLAR, str(len(arg)),
+                                              SYM_CRLF)))
+                output.append(arg)
+                buf = SYM_CRLF
+            else:
+                buf = SYM_EMPTY.join((buf, SYM_DOLLAR, str(len(arg)),
+                                      SYM_CRLF, arg, SYM_CRLF))
+    output.append(buf)
     return output
 
-CMD_PING = pack_command('ping')
+
+def pack_command(command, *args):
+    return squash_commands([(command,) + args])
+
 CMD_INFO = pack_command('info')
 CMD_CLUSTER_NODES = pack_command('cluster', 'nodes')
 CMD_CLUSTER_INFO = pack_command('cluster', 'info')
 
 
 class Talker(object):
-    def __init__(self, host, port):
+    def __init__(self, host, port, timeout=5):
         self.host = host
         self.port = port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.reader = hiredis.Reader()
         self.last_raw_message = ''
 
-        self.sock.settimeout(8)
+        self.sock.settimeout(timeout)
         logging.debug('Connect to %s:%d', host, port)
         self.sock.connect((host, port))
 
@@ -70,10 +71,24 @@ class Talker(object):
             if r != False:
                 return r
 
-    def talk_raw(self, command):
+    def _recv_multi(self, n):
+        resp = []
+        while len(resp) < n:
+            m = self.sock.recv(16384)
+            self.last_raw_message += m
+            self.reader.feed(m)
+
+            r = self.reader.gets()
+            while r != False:
+                resp.append(r)
+                r = self.reader.gets()
+        return resp
+
+    def talk_raw(self, command, recv=None):
+        recv = recv or self._recv
         for c in command:
             self.sock.send(c)
-        r = self._recv()
+        r = recv()
         if r is None:
             raise ValueError('No reply')
         if isinstance(r, hiredis.ReplyError):
@@ -83,14 +98,15 @@ class Talker(object):
     def talk(self, *args):
         return self.talk_raw(pack_command(*args))
 
+    def talk_bulk(self, cmd_list):
+        return self.talk_raw(squash_commands(cmd_list),
+                             recv=lambda: self._recv_multi(len(cmd_list)))
+
     def close(self):
         return self.sock.close()
 
 
 class ClusterNode(object):
-    # What does each field mean in "cluster nodes" output
-    # > http://oldblog.antirez.com/post/2-4-and-other-news.html
-    # but it didn't list assigned slots / node_index
     def __init__(self, node_id, latest_know_ip_address_and_port,
                  role_in_cluster, node_id_of_master_if_it_is_a_slave,
                  last_ping_sent_time, last_pong_received_time, node_index,
@@ -104,9 +120,11 @@ class ClusterNode(object):
                                 else role_in_cluster)
         self.master_id = node_id_of_master_if_it_is_a_slave
         self.assigned_slots = []
+        self.slots_migrating = False
         for slots_range in assigned_slots:
             if '[' == slots_range[0] and ']' == slots_range[-1]:
                 # exclude migrating slot
+                self.slots_migrating = True
                 continue
             if '-' in slots_range:
                 begin, end = slots_range.split('-')

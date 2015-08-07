@@ -24,7 +24,7 @@ var config = struct {
 	SlotsReloadInterval    time.Duration `flag:"slots-reload-interval, slots reload interval"`
 	LogLevel               string        `flag:"log-level, log level eg. debug, info, warn, error, fatal and panic"`
 	LogFile                string        `flag:"log-file, log file path"`
-	LogEveryN              int           `flag:"log-every-n, output an access log for every N commands"`
+	LogEveryN              uint64        `flag:"log-every-n, output an access log for every N commands"`
 	BackendIdleConnections int           `flag:"backend-idle-connections, max number of idle connections for each backend server"`
 }{
 	Addr:                   "0.0.0.0:8088",
@@ -48,9 +48,7 @@ func handleSetLogLevel(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	if err := autoflags.Define(&config); err != nil {
-		log.Fatal(err)
-	}
+	autoflags.Define(&config)
 	flag.Parse()
 	log.SetLevelByString(config.LogLevel)
 	// to avoid pprof being optimized by gofmt
@@ -62,13 +60,7 @@ func main() {
 	if config.LogEveryN <= 0 {
 		proxy.LogEveryN = 1
 	} else {
-		var logEveryN interface{}
-		logEveryN = uint32(config.LogEveryN)
-		if n, ok := logEveryN.(uint32); ok {
-			proxy.LogEveryN = n
-		} else {
-			log.Fatalf("invalid value for param log-every-n", config.LogEveryN)
-		}
+		proxy.LogEveryN = config.LogEveryN
 	}
 	log.Infof("%#v", config)
 	sigChan := make(chan os.Signal)

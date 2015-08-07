@@ -5,28 +5,21 @@ from retrying import retry
 
 from exceptions import RedisStatusError
 from clusternode import Talker, ClusterNode, base_balance_plan
-from clusternode import CMD_PING, CMD_INFO, CMD_CLUSTER_NODES, CMD_CLUSTER_INFO
+from clusternode import CMD_INFO, CMD_CLUSTER_NODES, CMD_CLUSTER_INFO
 
-
+SLOT_COUNT = 16384
 PAT_CLUSTER_ENABLED = re.compile('cluster_enabled:([01])')
 PAT_CLUSTER_STATE = re.compile('cluster_state:([a-z]+)')
 PAT_CLUSTER_SLOT_ASSIGNED = re.compile('cluster_slots_assigned:([0-9]+)')
-PAT_MIGRATING_IN = re.compile(r'\[(?P<slot>[0-9]+)-<-(?P<id>\w+)\]$')
-PAT_MIGRATING_OUT = re.compile(r'\[(?P<slot>[0-9]+)->-(?P<id>\w+)\]$')
-
-# One Redis cluster requires at least 16384 slots
-SLOT_COUNT = 16384
+PAT_MIGRATING_IN = re.compile(r'\[([0-9]+)-<-(\w+)\]')
+PAT_MIGRATING_OUT = re.compile(r'\[([0-9]+)->-(\w+)\]')
 
 
 def _valid_node_info(n):
-    return len(n) != 0 and 'fail' not in n
+    return len(n) != 0 and 'fail' not in n and 'handshake' not in n
 
 
 def _ensure_cluster_status_unset(t):
-    m = t.talk_raw(CMD_PING)
-    if m.lower() != 'pong':
-        raise hiredis.ProtocolError('Expect pong but recv: %s' % m)
-
     m = t.talk_raw(CMD_INFO)
     logging.debug('Ask `info` Rsp %s', m)
     cluster_enabled = PAT_CLUSTER_ENABLED.findall(m)
@@ -52,10 +45,6 @@ def _ensure_cluster_status_set_at(host, port):
 
 
 def _ensure_cluster_status_set(t):
-    m = t.talk_raw(CMD_PING)
-    if m.lower() != 'pong':
-        raise hiredis.ProtocolError('Expect pong but recv: %s' % m)
-
     m = t.talk_raw(CMD_INFO)
     logging.debug('Ask `info` Rsp %s', m)
     cluster_enabled = PAT_CLUSTER_ENABLED.findall(m)
@@ -67,14 +56,14 @@ def _ensure_cluster_status_set(t):
     logging.debug('Ask `cluster info` Rsp %s', m)
     cluster_state = PAT_CLUSTER_STATE.findall(m)
     cluster_slot_assigned = PAT_CLUSTER_SLOT_ASSIGNED.findall(m)
-    if cluster_state[0] != 'ok':
+    if cluster_state[0] != 'ok' and int(cluster_slot_assigned[0]) == 0:
         raise hiredis.ProtocolError(
             'Node %s:%d is not in a cluster' % (t.host, t.port))
 
 
 # Redis instance responses to clients BEFORE changing its 'cluster_state'
 #   just retry some times, it should become OK
-@retry(stop_max_attempt_number=16, wait_fixed=1000)
+@retry(stop_max_attempt_number=64, wait_fixed=500)
 def _poll_check_status(t):
     m = t.talk_raw(CMD_CLUSTER_INFO)
     logging.debug('Ask `cluster info` Rsp %s', m)
@@ -113,52 +102,53 @@ def start_cluster_on_multi(host_port_list):
             logging.info('Instance at %s:%d checked', t.host, t.port)
 
         first_talker = talkers[0]
+        for i, t in enumerate(talkers[1:]):
+            t.talk('cluster', 'meet', first_talker.host, first_talker.port)
+
         slots_each = SLOT_COUNT / len(talkers)
         slots_residue = SLOT_COUNT - slots_each * len(talkers)
         first_node_slots = slots_residue + slots_each
+
         first_talker.talk('cluster', 'addslots', *xrange(first_node_slots))
         logging.info('Add %d slots to %s:%d', slots_residue + slots_each,
                      first_talker.host, first_talker.port)
         for i, t in enumerate(talkers[1:]):
-            t.talk('cluster', 'meet', first_talker.host, first_talker.port)
             t.talk('cluster', 'addslots', *xrange(
                 i * slots_each + first_node_slots,
                 (i + 1) * slots_each + first_node_slots))
             logging.info('Add %d slots to %s:%d', slots_each, t.host, t.port)
 
-        _poll_check_status(first_talker)
+        for t in talkers:
+            _poll_check_status(t)
     finally:
         for t in talkers:
             t.close()
 
 
 def _migr_keys(src_talker, target_host, target_port, slot):
+    key_count = 0
     while True:
         keys = src_talker.talk('cluster', 'getkeysinslot', slot, 10)
         if len(keys) == 0:
-            return
-        for k in keys:
-            # Why 0, 15000 ? Just following existent codes
-            # > https://github.com/antirez/redis/blob/3.0/src/redis-trib.rb
-            # > #L784
-            m = src_talker.talk('migrate', target_host, target_port, k,
-                                0, 15000)
-            # don't panic when one of the keys failed to migrate, log & retry
-            if m.lower() != 'ok':
-                logging.warning(
-                    'Not OK while moving key [ %s ] in slot [ %d ]\n'
-                    '  Source node - %s:%d => Target node - %s:%d\n'
-                    'Got %s\nRetry later', k, slot, src_talker.host,
-                    src_talker.port, target_host, target_port, m)
+            return key_count
+        key_count += len(keys)
+        src_talker.talk_bulk(
+            [['migrate', target_host, target_port, k, 0, 30000] for k in keys])
 
 
-def _migr_slots(source_node, target_node, migrate_count, nodes):
+def _migr_slots(source_node, target_node, slots, nodes):
     logging.info(
-        'Migrating %d slots from %s<%s:%d> to %s<%s:%d>', migrate_count,
+        'Migrating %d slots from %s<%s:%d> to %s<%s:%d>', len(slots),
         source_node.node_id, source_node.host, source_node.port,
         target_node.node_id, target_node.host, target_node.port)
-    for slot in source_node.assigned_slots[:migrate_count]:
-        _migr_one_slot(source_node, target_node, slot, nodes)
+    key_count = 0
+    for slot in slots:
+        key_count += _migr_one_slot(source_node, target_node, slot, nodes)
+    logging.info(
+        'Migrated: %d slots %d keys from %s<%s:%d> to %s<%s:%d>',
+        len(slots), key_count,
+        source_node.node_id, source_node.host, source_node.port,
+        target_node.node_id, target_node.host, target_node.port)
 
 
 def _migr_one_slot(source_node, target_node, slot, nodes):
@@ -169,6 +159,12 @@ def _migr_one_slot(source_node, target_node, slot, nodes):
                 'Source node - %s:%d' % (source_node.host, source_node.port),
                 'Target node - %s:%d' % (target_node.host, target_node.port),
                 'Got %s' % m]))
+
+    @retry(stop_max_attempt_number=16, wait_fixed=100)
+    def setslot_stable(talker, slot, node_id):
+        m = talker.talk('cluster', 'setslot', slot, 'node', node_id)
+        if m.lower() != 'ok':
+            raise hiredis.ReplyError(m)
 
     source_talker = source_node.talker()
     target_talker = target_node.talker()
@@ -191,18 +187,14 @@ def _migr_one_slot(source_node, target_node, slot, nodes):
         if 'not the owner of' not in e.message:
             raise
 
-    _migr_keys(source_talker, target_node.host, target_node.port, slot)
-
-    for node in nodes:
-        if node.node_id == source_node.node_id:
-            continue
-        t = node.talker()
-        expect_talk_ok(t.talk(
-            'cluster', 'setslot', slot, 'node', target_node.node_id), slot)
-    expect_talk_ok(source_talker.talk(
-        'cluster', 'setslot', slot, 'node', target_node.node_id), slot)
-    expect_talk_ok(target_talker.talk(
-        'cluster', 'setslot', slot, 'node', target_node.node_id), slot)
+    keys = _migr_keys(source_talker, target_node.host, target_node.port, slot)
+    try:
+        setslot_stable(source_talker, slot, target_node.node_id)
+        for node in nodes:
+            setslot_stable(node.talker(), slot, target_node.node_id)
+    except hiredis.ReplyError, e:
+        expect_talk_ok(e.message, slot)
+    return keys
 
 
 def _join_to_cluster(cluster_host, cluster_port, newin_talker):
@@ -235,7 +227,7 @@ def join_cluster(cluster_host, cluster_port, newin_host, newin_port,
         nodes = _list_nodes(t, default_host=newin_host)[0]
 
         for source, target, count in balance_plan(nodes, balancer):
-            _migr_slots(source, target, count, nodes)
+            _migr_slots(source, target, source.assigned_slots[:count], nodes)
     finally:
         t.close()
         for n in nodes:
@@ -265,10 +257,11 @@ def _check_master_and_migrate_slots(nodes, myself):
 
     mig_slots_to_each = len(myself.assigned_slots) / len(other_masters)
     for node in other_masters[:-1]:
-        _migr_slots(myself, node, mig_slots_to_each, nodes)
+        _migr_slots(myself, node, myself.assigned_slots[:mig_slots_to_each],
+                    nodes)
         del myself.assigned_slots[:mig_slots_to_each]
     node = other_masters[-1]
-    _migr_slots(myself, node, len(myself.assigned_slots), nodes)
+    _migr_slots(myself, node, myself.assigned_slots, nodes)
 
 
 def quit_cluster(host, port):
@@ -284,7 +277,11 @@ def quit_cluster(host, port):
         logging.info('Migrated for %s / Broadcast a `forget`', myself.node_id)
         for node in nodes:
             tk = node.talker()
-            tk.talk('cluster', 'forget', myself.node_id)
+            try:
+                tk.talk('cluster', 'forget', myself.node_id)
+            except hiredis.ReplyError, e:
+                if 'Unknown node' not in e.message:
+                    raise
         t.talk('cluster', 'reset')
     finally:
         t.close()
@@ -330,13 +327,10 @@ def fix_migrating(host, port):
             node.host = node.host or host
             nodes[node.node_id] = node
 
-            search = PAT_MIGRATING_IN.search(node_info)
-            if search is not None:
-                mig_dsts.append((node, search.groupdict()))
-
-            search = PAT_MIGRATING_OUT.search(node_info)
-            if search is not None:
-                mig_srcs.append((node, search.groupdict()))
+            mig_dsts.extend([(node, {'slot': g[0], 'id': g[1]})
+                             for g in PAT_MIGRATING_IN.findall(node_info)])
+            mig_srcs.extend([(node, {'slot': g[0], 'id': g[1]})
+                             for g in PAT_MIGRATING_OUT.findall(node_info)])
 
         for n, args in mig_dsts:
             node_id = args['id']
@@ -455,9 +449,42 @@ def migrate_slots(src_host, src_port, dst_host, dst_port, slots):
         raise ValueError('Not all slot held by %s:%d' % (src_host, src_port))
     for n in nodes:
         if n.host == dst_host and n.port == dst_port:
-            logging.info('Migrating %d slots from %s:%d to %s:%d', len(slots),
-                         src_host, src_port, dst_host, dst_port)
-            for s in slots:
-                _migr_one_slot(myself, n, s, nodes)
-            return
+            return _migr_slots(myself, n, slots, nodes)
     raise ValueError('Two nodes are not in the same cluster')
+
+
+def rescue_cluster(host, port, subst_host, subst_port):
+    failed_slots = set(xrange(SLOT_COUNT))
+    t = None
+    s = None
+    try:
+        t = Talker(host, port)
+        _ensure_cluster_status_set(t)
+        for node in _list_masters(t)[0]:
+            failed_slots -= set(node.assigned_slots)
+        if len(failed_slots) == 0:
+            logging.info('No need to rescue cluster at %s:%d', host, port)
+            return
+
+        s = Talker(subst_host, subst_port)
+        _ensure_cluster_status_unset(s)
+
+        m = s.talk('cluster', 'meet', host, port)
+        logging.debug('Ask `cluster meet` Rsp %s', m)
+        if m.lower() != 'ok':
+            raise RedisStatusError('Unexpected reply after MEET: %s' % m)
+
+        m = s.talk('cluster', 'addslots', *failed_slots)
+        logging.debug('Ask `cluster addslots` Rsp %s', m)
+
+        if m.lower() != 'ok':
+            raise RedisStatusError('Unexpected reply after ADDSLOTS: %s' % m)
+
+        _poll_check_status(s)
+        logging.info('Instance at %s:%d serves %d slots to rescue the cluster',
+                     subst_host, subst_port, len(failed_slots))
+    finally:
+        if t is not None:
+            t.close()
+        if s is not None:
+            s.close()

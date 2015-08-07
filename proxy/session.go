@@ -75,7 +75,7 @@ func (s *Session) ReadingLoop() {
 		// convert all command name to upper case
 		cmd.Args[0] = strings.ToUpper(cmd.Args[0])
 
-		if n := atomic.AddUint32(&accessLogCount, 1); n%LogEveryN == 0 {
+		if n := atomic.AddUint64(&accessLogCount, 1); n%LogEveryN == 0 {
 			if len(cmd.Args) > 1 {
 				log.Infof("access %s %s %s", s.RemoteAddr(), cmd.Name(), cmd.Args[1])
 			} else {

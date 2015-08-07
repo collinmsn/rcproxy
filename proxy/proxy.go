@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	LogEveryN      uint32
-	accessLogCount uint32 // overflow is allowed
+	LogEveryN      uint64
+	accessLogCount uint64 // overflow is allowed
 )
 
 type Proxy struct {

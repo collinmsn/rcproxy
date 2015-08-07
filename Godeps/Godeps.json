@@ -7,7 +7,7 @@
 	"Deps": [
 		{
 			"ImportPath": "github.com/artyom/autoflags",
-			"Rev": "6043bc3a2dc328191cc47a19b822394f258c09dc"
+			"Rev": "8d4acb53349c5f11e663d75ad9d3e54f5ce17d3c"
 		},
 		{
 			"ImportPath": "github.com/collinmsn/resp",
