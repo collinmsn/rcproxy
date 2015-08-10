@@ -10,7 +10,7 @@ import (
 
 var (
 	LogEveryN      uint64
-	accessLogCount uint64 // overflow is allowed
+	accessLogCount uint64
 )
 
 type Proxy struct {
