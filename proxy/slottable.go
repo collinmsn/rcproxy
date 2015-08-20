@@ -2,67 +2,91 @@ package proxy
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 
 	"github.com/collinmsn/resp"
-	log "github.com/ngaut/logging"
 )
 
 const (
-	NumSlots = 16384
+	NumSlots                   = 16384
+	CLUSTER_SLOTS_START        = 0
+	CLUSTER_SLOTS_END          = 1
+	CLUSTER_SLOTS_SERVER_START = 2
 )
 
-var (
-	ERR_INVALID_SLOT_INFO = errors.New("invalid slot info")
-)
+// ServerGroup根据cluster slots和ReadPrefer得出
+type ServerGroup struct {
+	write string
+	read  []string
+}
 
 type SlotTable struct {
-	slotServers []string
+	serverGroups []*ServerGroup
+	// a cheap way to random select read backend
+	counter uint32
 }
 
 func NewSlotTable() *SlotTable {
 	st := &SlotTable{
-		slotServers: make([]string, NumSlots),
+		serverGroups: make([]*ServerGroup, NumSlots),
 	}
 	return st
 }
 
-func (st *SlotTable) Get(slot int) string {
-	return st.slotServers[slot]
+func (st *SlotTable) WriteServer(slot int) string {
+	return st.serverGroups[slot].write
 }
 
-func (st *SlotTable) Set(slot int, server string) {
-	st.slotServers[slot] = server
+func (st *SlotTable) ReadServer(slot int) string {
+	st.counter += 1
+	readServers := st.serverGroups[slot].read
+	return readServers[st.counter%uint32(len(readServers))]
 }
 
 func (st *SlotTable) SetSlotInfo(si *SlotInfo) {
 	for i := si.start; i <= si.end; i++ {
-		st.Set(i, si.master)
+		st.serverGroups[i] = &ServerGroup{
+			write: si.write,
+			read:  si.read,
+		}
 	}
 }
 
 type SlotInfo struct {
-	start  int
-	end    int
-	master string
+	start int
+	end   int
+	write string
+	read  []string
 }
 
-func NewSlotInfo(data *resp.Data) (si *SlotInfo, err error) {
-	if len(data.Array) < 3 || len(data.Array[2].Array) != 2 {
-		log.Error(data.Array)
-		return nil, ERR_INVALID_SLOT_INFO
+func NewSlotInfo(data *resp.Data) *SlotInfo {
+	/*
+	   cluster slots array element example
+	   1) 1) (integer) 10923
+	      2) (integer) 16383
+	      3) 1) "10.4.17.164"
+	         2) (integer) 7705
+	      4) 1) "10.4.17.164"
+	         2) (integer) 7708
+	*/
+	si := &SlotInfo{
+		start: int(data.Array[CLUSTER_SLOTS_START].Integer),
+		end:   int(data.Array[CLUSTER_SLOTS_END].Integer),
 	}
-	host := string(data.Array[2].Array[0].String)
-	if len(host) == 0 {
-		host = "127.0.0.1"
+	for i := CLUSTER_SLOTS_SERVER_START; i < len(data.Array); i++ {
+		host := string(data.Array[i].Array[0].String)
+		if len(host) == 0 {
+			host = "127.0.0.1"
+		}
+		port := int(data.Array[i].Array[1].Integer)
+		node := fmt.Sprintf("%s:%d", host, port)
+		if i == CLUSTER_SLOTS_SERVER_START {
+			si.write = node
+		} else {
+			si.read = append(si.read, node)
+		}
 	}
-	si = &SlotInfo{
-		start:  int(data.Array[0].Integer),
-		end:    int(data.Array[1].Integer),
-		master: fmt.Sprintf("%s:%d", host, int(data.Array[2].Array[1].Integer)),
-	}
-	return si, nil
+	return si
 }
 
 func Key2Slot(key string) int {

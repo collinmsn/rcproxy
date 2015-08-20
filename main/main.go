@@ -26,6 +26,7 @@ var config = struct {
 	LogFile                string        `flag:"log-file, log file path"`
 	LogEveryN              uint64        `flag:"log-every-n, output an access log for every N commands"`
 	BackendIdleConnections int           `flag:"backend-idle-connections, max number of idle connections for each backend server"`
+	ReadPrefer             int           `flag:"read-prefer, where read command to send to, eg. READ_PREFER_MASTER, READ_PREFER_SLAVE, READ_PREFER_SLAVE_IDC"`
 }{
 	Addr:                   "0.0.0.0:8088",
 	DebugAddr:              "",
@@ -36,6 +37,7 @@ var config = struct {
 	LogFile:                "rcproxy.log",
 	LogEveryN:              100,
 	BackendIdleConnections: 5,
+	ReadPrefer:             proxy.READ_PREFER_MASTER,
 }
 
 func handleSetLogLevel(w http.ResponseWriter, r *http.Request) {
@@ -82,8 +84,8 @@ func main() {
 		startupNodes[i] = startupNodes[indexes[i]]
 		startupNodes[indexes[i]] = startupNode
 	}
-	connPool := proxy.NewConnPool(config.BackendIdleConnections, config.ConnectTimeout)
-	dispatcher := proxy.NewDispatcher(startupNodes, config.SlotsReloadInterval, connPool)
+	connPool := proxy.NewConnPool(config.BackendIdleConnections, config.ConnectTimeout, config.ReadPrefer != proxy.READ_PREFER_MASTER)
+	dispatcher := proxy.NewDispatcher(startupNodes, config.SlotsReloadInterval, connPool, config.ReadPrefer)
 	if err := dispatcher.InitSlotTable(); err != nil {
 		log.Fatal(err)
 	}

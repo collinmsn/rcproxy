@@ -109,11 +109,12 @@ func (s *Session) ReadingLoop() {
 		key := cmd.Value(1)
 		slot := Key2Slot(key)
 		plReq := &PipelineRequest{
-			cmd:   cmd,
-			slot:  slot,
-			seq:   s.getNextReqSeq(),
-			backQ: s.backQ,
-			wg:    s.reqWg,
+			cmd:      cmd,
+			readOnly: IsReadOnlyCmd(cmd),
+			slot:     slot,
+			seq:      s.getNextReqSeq(),
+			backQ:    s.backQ,
+			wg:       s.reqWg,
 		}
 
 		s.reqWg.Add(1)
@@ -213,12 +214,8 @@ func (s *Session) handleResp(plRsp *PipelineResponse) error {
 		raw := plRsp.rsp.Raw()
 		if raw[0] == resp.T_Error {
 			if bytes.HasPrefix(raw, MOVED) {
-				slot, server := ParseRedirectInfo(string(raw))
-				s.dispatcher.UpdateSlotInfo(&SlotInfo{
-					start:  slot,
-					end:    slot,
-					master: server,
-				})
+				_, server := ParseRedirectInfo(string(raw))
+				s.dispatcher.TriggerReloadSlots()
 				s.redirect(server, plRsp, false)
 			} else if bytes.HasPrefix(raw, ASK) {
 				_, server := ParseRedirectInfo(string(raw))
@@ -271,6 +268,7 @@ func (s *Session) handleMultiKeyCmd(cmd *resp.Command, numKeys int) {
 	mc := NewMultiKeyCmd(cmd, numKeys)
 	// multi sub cmd share the same seq number
 	seq := s.getNextReqSeq()
+	readOnly := mc.CmdType() == MGET
 	for i := 0; i < numKeys; i++ {
 		switch mc.CmdType() {
 		case MGET:
@@ -287,6 +285,7 @@ func (s *Session) handleMultiKeyCmd(cmd *resp.Command, numKeys int) {
 		slot := Key2Slot(key)
 		plReq := &PipelineRequest{
 			cmd:       subCmd,
+			readOnly:  readOnly,
 			slot:      slot,
 			seq:       seq,
 			subSeq:    i,

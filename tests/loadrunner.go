@@ -32,6 +32,7 @@ func write(server string, exitChan chan struct{}) {
 		i := rand.Int() % maxKeyNum
 		key := fmt.Sprintf("key:%d", i)
 		if _, err := conn.Do("SET", key, key); err != nil {
+			log.Printf("set error %v", err)
 			break
 		}
 	}
@@ -58,6 +59,7 @@ func read(server string, exitChan chan struct{}) {
 		i := rand.Int() % maxKeyNum
 		key := fmt.Sprintf("key:%d", i)
 		if reply, err := conn.Do("GET", key); err != nil {
+			log.Printf("get error %v %v", key, err)
 			break
 		} else {
 			log.Printf("key->%s", reply)
@@ -66,7 +68,7 @@ func read(server string, exitChan chan struct{}) {
 }
 
 func main() {
-	runtime.GOMAXPROCS(3)
+	runtime.GOMAXPROCS(8)
 	exitChan := make(chan struct{})
 	for i := 0; i < numWriter; i++ {
 		go write(server, exitChan)

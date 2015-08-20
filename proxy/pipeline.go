@@ -8,6 +8,8 @@ import (
 
 type PipelineRequest struct {
 	cmd *resp.Command
+	// if it is readOnly command
+	readOnly bool
 	// key slot
 	slot int
 	// session wide request sequence number
