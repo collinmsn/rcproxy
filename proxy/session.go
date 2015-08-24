@@ -84,7 +84,8 @@ func (s *Session) ReadingLoop() {
 		}
 
 		// check if command is supported
-		if IsBlackListCmd(cmd) {
+		cmdFlag := CmdFlag(cmd)
+		if cmdFlag&CMD_FLAG_BLACK != 0 {
 			plReq := &PipelineRequest{
 				seq: s.getNextReqSeq(),
 				wg:  s.reqWg,
@@ -110,7 +111,7 @@ func (s *Session) ReadingLoop() {
 		slot := Key2Slot(key)
 		plReq := &PipelineRequest{
 			cmd:      cmd,
-			readOnly: IsReadOnlyCmd(cmd),
+			readOnly: cmdFlag&CMD_FLAG_READONLY != 0,
 			slot:     slot,
 			seq:      s.getNextReqSeq(),
 			backQ:    s.backQ,
