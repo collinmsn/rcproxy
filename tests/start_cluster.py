@@ -3,16 +3,15 @@ import sys
 import logging
 import time
 from redistrib import command
+logging.getLogger().setLevel(logging.INFO)
 
 PORTS = [
     7001,
     7002,
     7003,
-    7004,
-    7005,
-    7006,
 ]
-assert len(PORTS) % 2 == 0
+
+REPLICAS = 3
 
 cluster = "cluster"
 tmpl_file = "redis.conf.tmpl"
@@ -26,24 +25,30 @@ def start_servers():
     logging.info("start servers")
     tmpl = open(tmpl_file, 'r').read()
     for port in PORTS:
-        dir = "%s/%s" % (cluster, port)
-        mkdir_p(dir)
-        with open(os.path.join(dir, "redis.conf"), 'w') as fp:
-            fp.write(tmpl.format(PORT=port))
+        for r in range(REPLICAS):
+            instance_port = port + r * 100
+            dir = "%s/%s" % (cluster, instance_port)
+            mkdir_p(dir)
+            with open(os.path.join(dir, "redis.conf"), 'w') as fp:
+                fp.write(tmpl.format(PORT=instance_port))
 
-        cmd = "cd %s; redis-server redis.conf" % dir
-        os.system(cmd)
-
+            cmd = "cd %s; redis-server redis.conf" % dir
+            os.system(cmd)
 
 def start_cluster():
     logging.info("start cluster")
+    time.sleep(2)
     servers = [('127.0.0.1', port) for port in PORTS]
-    half = len(servers) / 2
-    command.start_cluster_on_multi(servers[0:half])
+    try:
+        command.start_cluster_on_multi(servers)
+    except Exception as e:
+        logging.error(e)
     time.sleep(5)
-    for i in range(half):
-        command.replicate("127.0.0.1", PORTS[i], "127.0.0.1", PORTS[i + half])
-
+    for port in PORTS:
+        for r in range(1, REPLICAS):
+            slave_port = port + r * 100
+            logging.info("replicate: 127.0.0.1:%d <- 127.0.0.1:%d", port, slave_port)
+            command.replicate("127.0.0.1", port, "127.0.0.1", slave_port)
 
 if os.path.exists(cluster):
     start_servers()
