@@ -1,11 +1,16 @@
-all: build-proxy
 
-build-proxy:
+GOPATH := $(shell godep path):$(GOPATH) 
+
+all: server test
+
+server:
+	find ./ -name "*.go" | xargs goimports -w 
+	find ./ -name "*.go" | xargs gofmt -w
 	@mkdir -p bin
-	go build -o bin/rcproxy ./main
+	go build -v -o bin/rcproxy ./main 
 
 clean:
 	@rm -rf bin
 
-gotest:
+test:
 	go test ./proxy/... -race

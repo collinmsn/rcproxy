@@ -6,11 +6,12 @@ import (
 
 	"bufio"
 
+	"math/rand"
+	"strings"
+
 	"github.com/collinmsn/resp"
 	"github.com/fatih/pool"
 	log "github.com/ngaut/logging"
-	"math/rand"
-	"strings"
 )
 
 // dispatcher routes requests from all clients to the right backend
