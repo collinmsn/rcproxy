@@ -26,7 +26,7 @@ var config = struct {
 	LogFile                string        `flag:"log-file, log file path"`
 	LogEveryN              uint64        `flag:"log-every-n, output an access log for every N commands"`
 	BackendIdleConnections int           `flag:"backend-idle-connections, max number of idle connections for each backend server"`
-	ReadPrefer             int           `flag:"read-prefer, where read command to send to, eg. READ_PREFER_MASTER, READ_PREFER_SLAVE, READ_PREFER_SLAVE_IDC"`
+	ReadPrefer             int           `flag:"read-prefer, where read command to send to, valid options are: 0: READ_PREFER_MASTER, 1: READ_PREFER_SLAVE, 2: READ_PREFER_SLAVE_IDC`
 }{
 	Addr:                   "0.0.0.0:8088",
 	DebugAddr:              "",
@@ -53,10 +53,12 @@ func main() {
 	autoflags.Define(&config)
 	flag.Parse()
 	log.SetLevelByString(config.LogLevel)
+	log.SetFlags(log.Ldate | log.Lmicroseconds)
 	// to avoid pprof being optimized by gofmt
 	log.Debug(pprof.Handler("profile"))
 	if len(config.LogFile) != 0 {
 		log.SetOutputByName(config.LogFile)
+		log.SetHighlighting(false)
 		log.SetRotateByDay()
 	}
 	if config.LogEveryN <= 0 {

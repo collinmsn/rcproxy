@@ -9,6 +9,8 @@ import (
 	"math/rand"
 	"strings"
 
+	"errors"
+
 	"github.com/collinmsn/resp"
 	"github.com/fatih/pool"
 	log "github.com/ngaut/logging"
@@ -34,15 +36,13 @@ const (
 
 var (
 	REDIS_CMD_CLUSTER_SLOTS []byte
-	REDIS_CMD_CLUSTER_NODES []byte
 	REDIS_CMD_READ_ONLY     []byte
+	errEmptyClusterSlots    = errors.New("Empty cluster slots")
 )
 
 func init() {
 	cmd, _ := resp.NewCommand("CLUSTER", "SLOTS")
 	REDIS_CMD_CLUSTER_SLOTS = cmd.Format()
-	cmd, _ = resp.NewCommand("CLUSTER", "NODES")
-	REDIS_CMD_CLUSTER_NODES = cmd.Format()
 	cmd, _ = resp.NewCommand("READONLY")
 	REDIS_CMD_READ_ONLY = cmd.Format()
 }
@@ -214,35 +214,19 @@ func (d *Dispatcher) doReload(server string) (slotInfos []*SlotInfo, err error) 
 		log.Error(server, err)
 		return
 	}
+	if data.T == resp.T_Error {
+		err = errors.New(string(data.Format()))
+		return
+	}
+	if len(data.Array) == 0 {
+		err = errEmptyClusterSlots
+		return
+	}
 	slotInfos = make([]*SlotInfo, 0, len(data.Array))
 	for _, info := range data.Array {
 		slotInfos = append(slotInfos, NewSlotInfo(info))
 	}
 
-	// filter slot info with cluster nodes information
-	_, err = conn.Write(REDIS_CMD_CLUSTER_NODES)
-	if err != nil {
-		log.Errorf("write cluster nodes error", server, err)
-		return
-	}
-	r = bufio.NewReader(conn)
-	data, err = resp.ReadData(r)
-	if err != nil {
-		log.Error(server, err)
-		return
-	}
-	aliveNodes := make(map[string]bool)
-	lines := strings.Split(strings.TrimSpace(string(data.String)), "\n")
-	for _, line := range lines {
-		// 305fa52a4ed213df3ca97a4399d9e2a6e44371d2 10.4.17.164:7704 master - 0 1440042315188 2 connected 5461-10922
-		log.Debug(line)
-		elements := strings.SplitN(line, " ", CLUSTER_NODES_FIELD_SPLIT_NUM)
-		if !strings.Contains(elements[CLUSTER_NODES_FIELD_NUM_FLAGS], "fail") {
-			aliveNodes[elements[CLUSTER_NODES_FIELD_NUM_IP_PORT]] = true
-		} else {
-			log.Warningf("node fails: %s", elements[1])
-		}
-	}
 	for _, si := range slotInfos {
 		if d.readPrefer == READ_PREFER_MASTER {
 			si.read = []string{si.write}
@@ -255,10 +239,6 @@ func (d *Dispatcher) doReload(server string) (slotInfos []*SlotInfo, err error) 
 			}
 			var readNodes []string
 			for _, node := range si.read {
-				if !aliveNodes[node] {
-					log.Infof("filter %s since it's not alive", node)
-					continue
-				}
 				if d.readPrefer == READ_PREFER_SLAVE_IDC {
 					// ips are regarded as in the same idc if they have the same first two segments, eg 10.4.x.x
 					if !strings.HasPrefix(node, localIPPrefix) {
