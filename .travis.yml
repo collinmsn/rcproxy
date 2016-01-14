@@ -1,9 +1,8 @@
 language: go
 
 go:
-    - 1.4.1
+    - 1.5.1
 
 script: 
-        - ./bootstrap.sh
+        - go get -u golang.org/x/tools/cmd/goimports
         - make 
-        - make gotest
