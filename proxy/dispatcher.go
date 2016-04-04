@@ -27,11 +27,6 @@ const (
 	READ_PREFER_SLAVE
 	// read from slave in the same idc if possible
 	READ_PREFER_SLAVE_IDC
-
-	CLUSTER_NODES_FIELD_NUM_IP_PORT = 1
-	CLUSTER_NODES_FIELD_NUM_FLAGS   = 2
-	// it must be larger than any FIELD index
-	CLUSTER_NODES_FIELD_SPLIT_NUM = 4
 )
 
 var (
@@ -128,7 +123,7 @@ func (d *Dispatcher) handleSlotInfoChanged(slotInfos []*SlotInfo) {
 
 	for server, tr := range d.taskRunners {
 		if _, ok := newServers[server]; !ok {
-			log.Infof("exit unused task runner %s", server)
+			log.Info("exit unused task runner", server)
 			tr.Exit()
 			delete(d.taskRunners, server)
 		}
@@ -143,7 +138,7 @@ func (d *Dispatcher) Schedule(req *PipelineRequest) {
 // at most every slotReloadInterval
 // it also reload topology at a relative long periodic interval
 func (d *Dispatcher) slotsReloadLoop() {
-	periodicReloadInterval := 60 * time.Second
+	periodicReloadInterval := 300 * time.Second
 	for {
 		select {
 		case <-time.After(d.slotReloadInterval):

@@ -3,7 +3,9 @@ package proxy
 import (
 	"container/heap"
 	"errors"
+	"net"
 	"testing"
+	"time"
 )
 
 var (
@@ -86,5 +88,51 @@ func TestHandleRespPipeline(t *testing.T) {
 		if s.rspSeq != int64(rspSeqs[i]) {
 			t.Errorf("expected rsp seq: %d, got %d", rspSeqs[i], s.rspSeq)
 		}
+	}
+}
+
+func TestSessionNotifyReader(t *testing.T) {
+	l, err := net.ListenTCP("tcp", nil)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer l.Close()
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	session := NewSession(conn, nil, nil)
+	go session.Run()
+	<-time.After(100 * time.Millisecond)
+	start := time.Now()
+	session.notifyReader()
+	session.closeWg.Wait()
+	if time.Since(start) > 100*time.Millisecond {
+		t.Error("notify reader takes too long")
+	}
+}
+func TestSessionNotifyWriter(t *testing.T) {
+	l, err := net.ListenTCP("tcp", nil)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	defer l.Close()
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	session := NewSession(conn, nil, nil)
+	go session.Run()
+	<-time.After(100 * time.Millisecond)
+	start := time.Now()
+	session.Conn.Close()
+	// notify writer is called by reading loop
+	session.closeWg.Wait()
+	if time.Since(start) > 100*time.Millisecond {
+		t.Error("notify writer takes too long")
 	}
 }

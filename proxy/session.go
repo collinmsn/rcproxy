@@ -23,42 +23,59 @@ var (
 	BLACK_CMD_ERR = []byte("unsupported command")
 )
 
+// Session represents a connection between client and proxy
+// connection reading and writing are executed individually in go routines
+// since requests are sent to different backends, response may come back unordered
+// a heap is used to reorder the pipeline responses
 type Session struct {
 	net.Conn
-	r           *bufio.Reader
-	reqSeq      int64
-	rspSeq      int64
-	backQ       chan *PipelineResponse
-	closed      bool
-	closeSignal *sync.WaitGroup
-	reqWg       *sync.WaitGroup
-	rspHeap     *PipelineResponseHeap
-	connPool    *ConnPool
-	dispatcher  *Dispatcher
+	connClosed int32
+	reader     *bufio.Reader
+	reqSeq     int64
+	rspSeq     int64
+	rspCh      chan *PipelineResponse
+	closeWg    *WaitGroupWrapper
+	reqWg      *sync.WaitGroup
+	rspHeap    *PipelineResponseHeap
+	connPool   *ConnPool
+	dispatcher *Dispatcher
+}
+
+func NewSession(conn net.Conn, connPool *ConnPool, dispatcher *Dispatcher) *Session {
+	session := &Session{
+		Conn:       conn,
+		reader:     bufio.NewReader(conn),
+		rspCh:      make(chan *PipelineResponse, 1000),
+		closeWg:    &WaitGroupWrapper{},
+		reqWg:      &sync.WaitGroup{},
+		connPool:   connPool,
+		dispatcher: dispatcher,
+		rspHeap:    &PipelineResponseHeap{},
+	}
+	return session
 }
 
 func (s *Session) Run() {
-	s.closeSignal.Add(1)
-	go s.WritingLoop()
-	s.ReadingLoop()
+	s.closeWg.Wrap(s.WritingLoop)
+	s.closeWg.Wrap(s.ReadingLoop)
+	s.closeWg.Wait()
+	s.Close()
 }
 
-// WritingLoop consumes backQ and send response to client
+// WritingLoop consumes rspQueue and send response to client
 // It close the connection to notify reader on error
-// and continue loop until the reader has exited
+// and continue loop until the reader has told it to exit
 func (s *Session) WritingLoop() {
 	for {
 		select {
-		case rsp, ok := <-s.backQ:
+		case rsp, ok := <-s.rspCh:
 			if !ok {
-				// reader has closed backQ
-				s.Close()
-				s.closeSignal.Done()
+				log.Info("exit writing loop", s.Conn.RemoteAddr())
 				return
 			}
 
 			if err := s.handleRespPipeline(rsp); err != nil {
-				s.Close()
+				s.notifyReader()
 				continue
 			}
 		}
@@ -67,9 +84,9 @@ func (s *Session) WritingLoop() {
 
 func (s *Session) ReadingLoop() {
 	for {
-		cmd, err := resp.ReadCommand(s.r)
+		cmd, err := resp.ReadCommand(s.reader)
 		if err != nil {
-			log.Error(err)
+			log.Error("read command:", err)
 			break
 		}
 		// convert all command name to upper case
@@ -87,7 +104,7 @@ func (s *Session) ReadingLoop() {
 		cmdFlag := CmdFlag(cmd)
 		if cmdFlag&CMD_FLAG_BLACK != 0 {
 			plReq := &PipelineRequest{
-				seq: s.getNextReqSeq(),
+				seq: s.advanceReqSeq(),
 				wg:  s.reqWg,
 			}
 			s.reqWg.Add(1)
@@ -96,37 +113,31 @@ func (s *Session) ReadingLoop() {
 				rsp: resp.NewObjectFromData(rsp),
 				ctx: plReq,
 			}
-			s.backQ <- plRsp
+			s.rspCh <- plRsp
 			continue
 		}
 
 		// check if is multi key cmd
 		if yes, numKeys := IsMultiCmd(cmd); yes && numKeys > 1 {
 			s.handleMultiKeyCmd(cmd, numKeys)
-			continue
+		} else {
+			s.handleGenericCmd(cmd, cmdFlag)
 		}
-
-		// other general cmd
-		key := cmd.Value(1)
-		slot := Key2Slot(key)
-		plReq := &PipelineRequest{
-			cmd:      cmd,
-			readOnly: cmdFlag&CMD_FLAG_READONLY != 0,
-			slot:     slot,
-			seq:      s.getNextReqSeq(),
-			backQ:    s.backQ,
-			wg:       s.reqWg,
-		}
-
-		s.reqWg.Add(1)
-		s.dispatcher.Schedule(plReq)
 	}
-	// wait for all request done
+	// it's safe to close rspCh only after all requests have done
 	s.reqWg.Wait()
+	s.notifyWriter()
+	log.Info("exit reading loop", s.Conn.RemoteAddr())
+}
 
-	// notify writer
-	close(s.backQ)
-	s.closeSignal.Wait()
+// Notify reader by closing the underline connection
+func (s *Session) notifyReader() {
+	s.Close()
+}
+
+// Notify writer by closing the response channel
+func (s *Session) notifyWriter() {
+	close(s.rspCh)
 }
 
 // 将resp写出去。如果是multi key command，只有在全部完成后才汇总输出
@@ -139,7 +150,7 @@ func (s *Session) writeResp(plRsp *PipelineResponse) error {
 			return nil
 		}
 		buf = parentCmd.CoalesceRsp().rsp.Raw()
-		s.rspSeq++
+		s.advanceRspSeq()
 	} else {
 		buf = plRsp.rsp.Raw()
 	}
@@ -199,12 +210,9 @@ func (s *Session) redirect(server string, plRsp *PipelineResponse, ask bool) {
 
 // handleResp handles MOVED and ASK redirection and call write response
 func (s *Session) handleResp(plRsp *PipelineResponse) error {
-	if plRsp.ctx.seq != s.rspSeq {
-		panic("impossible")
-	}
 	plRsp.ctx.wg.Done()
 	if plRsp.ctx.parentCmd == nil {
-		s.rspSeq++
+		s.advanceRspSeq()
 	}
 
 	if plRsp.err != nil {
@@ -229,10 +237,8 @@ func (s *Session) handleResp(plRsp *PipelineResponse) error {
 		return plRsp.err
 	}
 
-	if !s.closed {
-		if err := s.writeResp(plRsp); err != nil {
-			return err
-		}
+	if err := s.writeResp(plRsp); err != nil {
+		return err
 	}
 
 	return nil
@@ -244,6 +250,9 @@ func (s *Session) handleResp(plRsp *PipelineResponse) error {
 func (s *Session) handleRespPipeline(plRsp *PipelineResponse) error {
 	if plRsp.ctx.seq != s.rspSeq {
 		heap.Push(s.rspHeap, plRsp)
+		if (plRsp.ctx.seq-s.rspSeq)%50 == 0 {
+			log.Warningf("resp pipeline client:%s rspseq:%d waitforseq:%d", s.Conn.RemoteAddr(), plRsp.ctx.seq, s.rspSeq)
+		}
 		return nil
 	}
 
@@ -268,7 +277,7 @@ func (s *Session) handleMultiKeyCmd(cmd *resp.Command, numKeys int) {
 	var err error
 	mc := NewMultiKeyCmd(cmd, numKeys)
 	// multi sub cmd share the same seq number
-	seq := s.getNextReqSeq()
+	seq := s.advanceReqSeq()
 	readOnly := mc.CmdType() == MGET
 	for i := 0; i < numKeys; i++ {
 		switch mc.CmdType() {
@@ -290,7 +299,7 @@ func (s *Session) handleMultiKeyCmd(cmd *resp.Command, numKeys int) {
 			slot:      slot,
 			seq:       seq,
 			subSeq:    i,
-			backQ:     s.backQ,
+			backQ:     s.rspCh,
 			parentCmd: mc,
 			wg:        s.reqWg,
 		}
@@ -299,22 +308,45 @@ func (s *Session) handleMultiKeyCmd(cmd *resp.Command, numKeys int) {
 	}
 }
 
+func (s *Session) handleGenericCmd(cmd *resp.Command, cmdFlag int) {
+	key := cmd.Value(1)
+	slot := Key2Slot(key)
+	plReq := &PipelineRequest{
+		cmd:      cmd,
+		readOnly: cmdFlag&CMD_FLAG_READONLY != 0,
+		slot:     slot,
+		seq:      s.advanceReqSeq(),
+		backQ:    s.rspCh,
+		wg:       s.reqWg,
+	}
+
+	s.reqWg.Add(1)
+	s.dispatcher.Schedule(plReq)
+}
+
+// close underline connection
+// it's safe to be called multi times
 func (s *Session) Close() {
-	log.Infof("close session %p", s)
-	if !s.closed {
-		s.closed = true
+	if atomic.CompareAndSwapInt32(&s.connClosed, 0, 1) {
+		log.Infof("close session %s reqseq:%d rspseq:%d rspheap:%d", s.Conn.RemoteAddr(), s.reqSeq, s.reqSeq, s.rspHeap.Len())
 		s.Conn.Close()
 	}
 }
 
 func (s *Session) Read(p []byte) (int, error) {
-	return s.r.Read(p)
+	return s.reader.Read(p)
 }
 
-func (s *Session) getNextReqSeq() (seq int64) {
+func (s *Session) advanceReqSeq() (seq int64) {
 	seq = s.reqSeq
 	s.reqSeq++
 	return
+}
+
+func (s *Session) advanceRspSeq() (seq int64) {
+	seq = s.rspSeq
+	s.rspSeq++
+	return seq
 }
 
 // ParseRedirectInfo parse slot redirect information from MOVED and ASK Error

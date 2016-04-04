@@ -1,9 +1,7 @@
 package proxy
 
 import (
-	"bufio"
 	"net"
-	"sync"
 
 	log "github.com/ngaut/logging"
 )
@@ -35,17 +33,8 @@ func (p *Proxy) Exit() {
 	close(p.exitChan)
 }
 
-func (p *Proxy) handleConnection(cc net.Conn) {
-	session := &Session{
-		Conn:        cc,
-		r:           bufio.NewReader(cc),
-		backQ:       make(chan *PipelineResponse, 1000),
-		closeSignal: &sync.WaitGroup{},
-		reqWg:       &sync.WaitGroup{},
-		connPool:    p.connPool,
-		dispatcher:  p.dispatcher,
-		rspHeap:     &PipelineResponseHeap{},
-	}
+func (p *Proxy) handleConnection(conn net.Conn) {
+	session := NewSession(conn, p.connPool, p.dispatcher)
 	session.Run()
 }
 
@@ -59,7 +48,7 @@ func (p *Proxy) Run() {
 	if err != nil {
 		log.Fatal(err)
 	} else {
-		log.Infof("proxy listens on %s", p.addr)
+		log.Info("proxy listens on", p.addr)
 	}
 	defer listener.Close()
 
@@ -71,7 +60,7 @@ func (p *Proxy) Run() {
 			log.Error(err)
 			continue
 		}
-		log.Infof("accept client: %s", conn.RemoteAddr())
+		log.Info("accept client", conn.RemoteAddr())
 		go p.handleConnection(conn)
 	}
 }

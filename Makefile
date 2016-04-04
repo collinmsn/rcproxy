@@ -15,4 +15,4 @@ clean:
 	@rm -rf bin
 
 test:
-	go test ./proxy/... -race
+	go test ./proxy/... -v -race

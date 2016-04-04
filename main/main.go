@@ -4,7 +4,7 @@ import (
 	"flag"
 	"math/rand"
 	"net/http"
-	"net/http/pprof"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -26,7 +26,7 @@ var config = struct {
 	LogFile                string        `flag:"log-file, log file path"`
 	LogEveryN              uint64        `flag:"log-every-n, output an access log for every N commands"`
 	BackendIdleConnections int           `flag:"backend-idle-connections, max number of idle connections for each backend server"`
-	ReadPrefer             int           `flag:"read-prefer, where read command to send to, valid options are: 0: READ_PREFER_MASTER, 1: READ_PREFER_SLAVE, 2: READ_PREFER_SLAVE_IDC`
+	ReadPrefer             int           `flag:"read-prefer, where read command to send to, valid options are: 0: READ_PREFER_MASTER, 1: READ_PREFER_SLAVE, 2: READ_PREFER_SLAVE_IDC"`
 }{
 	Addr:                   "0.0.0.0:8088",
 	DebugAddr:              "",
@@ -49,13 +49,16 @@ func handleSetLogLevel(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
+func initRandSeed() {
+	rand.Seed(time.Now().UnixNano())
+}
+
 func main() {
+	initRandSeed()
 	autoflags.Define(&config)
 	flag.Parse()
 	log.SetLevelByString(config.LogLevel)
 	log.SetFlags(log.Ldate | log.Lmicroseconds)
-	// to avoid pprof being optimized by gofmt
-	log.Debug(pprof.Handler("profile"))
 	if len(config.LogFile) != 0 {
 		log.SetOutputByName(config.LogFile)
 		log.SetHighlighting(false)
@@ -66,7 +69,7 @@ func main() {
 	} else {
 		proxy.LogEveryN = config.LogEveryN
 	}
-	log.Infof("%#v", config)
+	log.Info(config)
 	sigChan := make(chan os.Signal)
 	signal.Notify(sigChan, os.Interrupt, os.Kill)
 
@@ -81,11 +84,11 @@ func main() {
 
 	// shuffle startup nodes
 	startupNodes := strings.Split(config.StartupNodes, ",")
-	indexes := rand.Perm(len(startupNodes))
-	for i, startupNode := range startupNodes {
-		startupNodes[i] = startupNodes[indexes[i]]
-		startupNodes[indexes[i]] = startupNode
+	for i := len(startupNodes) - 1; i > 0; i-- {
+		j := rand.Intn(i + 1)
+		startupNodes[i], startupNodes[j] = startupNodes[j], startupNodes[i]
 	}
+
 	connPool := proxy.NewConnPool(config.BackendIdleConnections, config.ConnectTimeout, config.ReadPrefer != proxy.READ_PREFER_MASTER)
 	dispatcher := proxy.NewDispatcher(startupNodes, config.SlotsReloadInterval, connPool, config.ReadPrefer)
 	if err := dispatcher.InitSlotTable(); err != nil {
