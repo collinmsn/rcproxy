@@ -20,12 +20,12 @@ type PipelineRequest struct {
 	// session wide wait group
 	wg *sync.WaitGroup
 	// for multi key command, owner of this command
-	parentCmd *MultiKeyCmd
+	parentCmd *MultiRequest
 }
 
 type PipelineResponse struct {
-	rsp *resp.Object
-	ctx *PipelineRequest
+	obj *resp.Object
+	req *PipelineRequest
 	err error
 }
 
@@ -35,7 +35,7 @@ func (h PipelineResponseHeap) Len() int {
 	return len(h)
 }
 func (h PipelineResponseHeap) Less(i, j int) bool {
-	return h[i].ctx.seq < h[j].ctx.seq
+	return h[i].req.seq < h[j].req.seq
 }
 func (h PipelineResponseHeap) Swap(i, j int) {
 	h[i], h[j] = h[j], h[i]

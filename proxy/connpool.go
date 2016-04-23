@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/collinmsn/resp"
-	"github.com/fatih/pool"
 	log "github.com/ngaut/logging"
+	"gopkg.in/fatih/pool.v2"
 )
 
 type ConnPool struct {

@@ -12,8 +12,8 @@ import (
 	"errors"
 
 	"github.com/collinmsn/resp"
-	"github.com/fatih/pool"
 	log "github.com/ngaut/logging"
+	"gopkg.in/fatih/pool.v2"
 )
 
 // dispatcher routes requests from all clients to the right backend
@@ -42,7 +42,12 @@ func init() {
 	REDIS_CMD_READ_ONLY = cmd.Format()
 }
 
-type Dispatcher struct {
+type Dispatcher interface {
+	TriggerReloadSlots()
+	Schedule(req *PipelineRequest)
+}
+
+type RequestDispatcher struct {
 	startupNodes       []string
 	slotTable          *SlotTable
 	slotReloadInterval time.Duration
@@ -55,8 +60,8 @@ type Dispatcher struct {
 	readPrefer     int
 }
 
-func NewDispatcher(startupNodes []string, slotReloadInterval time.Duration, connPool *ConnPool, readPrefer int) *Dispatcher {
-	d := &Dispatcher{
+func NewDispatcher(startupNodes []string, slotReloadInterval time.Duration, connPool *ConnPool, readPrefer int) *RequestDispatcher {
+	d := &RequestDispatcher{
 		startupNodes:       startupNodes,
 		slotTable:          NewSlotTable(),
 		slotReloadInterval: slotReloadInterval,
@@ -70,7 +75,7 @@ func NewDispatcher(startupNodes []string, slotReloadInterval time.Duration, conn
 	return d
 }
 
-func (d *Dispatcher) InitSlotTable() error {
+func (d *RequestDispatcher) InitSlotTable() error {
 	if slotInfos, err := d.reloadTopology(); err != nil {
 		return err
 	} else {
@@ -81,7 +86,7 @@ func (d *Dispatcher) InitSlotTable() error {
 	return nil
 }
 
-func (d *Dispatcher) Run() {
+func (d *RequestDispatcher) Run() {
 	go d.slotsReloadLoop()
 	for {
 		select {
@@ -111,7 +116,7 @@ func (d *Dispatcher) Run() {
 }
 
 // remove unused task runner
-func (d *Dispatcher) handleSlotInfoChanged(slotInfos []*SlotInfo) {
+func (d *RequestDispatcher) handleSlotInfoChanged(slotInfos []*SlotInfo) {
 	newServers := make(map[string]bool)
 	for _, si := range slotInfos {
 		d.slotTable.SetSlotInfo(si)
@@ -130,14 +135,14 @@ func (d *Dispatcher) handleSlotInfoChanged(slotInfos []*SlotInfo) {
 	}
 }
 
-func (d *Dispatcher) Schedule(req *PipelineRequest) {
+func (d *RequestDispatcher) Schedule(req *PipelineRequest) {
 	d.reqCh <- req
 }
 
 // wait for the slot reload chan and reload cluster topology
 // at most every slotReloadInterval
 // it also reload topology at a relative long periodic interval
-func (d *Dispatcher) slotsReloadLoop() {
+func (d *RequestDispatcher) slotsReloadLoop() {
 	periodicReloadInterval := 300 * time.Second
 	for {
 		select {
@@ -168,7 +173,7 @@ func (d *Dispatcher) slotsReloadLoop() {
 
 // request "CLUSTER SLOTS" to retrieve the cluster topology
 // try each start up nodes until the first success one
-func (d *Dispatcher) reloadTopology() (slotInfos []*SlotInfo, err error) {
+func (d *RequestDispatcher) reloadTopology() (slotInfos []*SlotInfo, err error) {
 	log.Info("reload slot table")
 	indexes := rand.Perm(len(d.startupNodes))
 	for _, index := range indexes {
@@ -182,7 +187,7 @@ func (d *Dispatcher) reloadTopology() (slotInfos []*SlotInfo, err error) {
 /**
 获取cluster slots信息，并利用cluster nodes信息来将failed的slave过滤掉
 */
-func (d *Dispatcher) doReload(server string) (slotInfos []*SlotInfo, err error) {
+func (d *RequestDispatcher) doReload(server string) (slotInfos []*SlotInfo, err error) {
 	var conn net.Conn
 	conn, err = d.connPool.GetConn(server)
 	if err != nil {
@@ -255,12 +260,12 @@ func (d *Dispatcher) doReload(server string) (slotInfos []*SlotInfo, err error) 
 // schedule a reload task
 // this call is inherently throttled, so that multiple clients can call it at
 // the same time and it will only actually occur once
-func (d *Dispatcher) TriggerReloadSlots() {
+func (d *RequestDispatcher) TriggerReloadSlots() {
 	select {
 	case d.slotReloadChan <- struct{}{}:
 	default:
 	}
 }
-func (d *Dispatcher) Exit() {
+func (d *RequestDispatcher) Exit() {
 	close(d.reqCh)
 }

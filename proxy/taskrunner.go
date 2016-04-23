@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/collinmsn/resp"
-	"github.com/fatih/pool"
 	log "github.com/ngaut/logging"
+	"gopkg.in/fatih/pool.v2"
 )
 
 var (
@@ -167,12 +167,12 @@ func (tr *TaskRunner) handleResp(rsp interface{}) error {
 
 	plReq := tr.inflight.Remove(tr.inflight.Front()).(*PipelineRequest)
 	plRsp := &PipelineResponse{
-		ctx: plReq,
+		req: plReq,
 	}
 	var err error
 	switch rsp.(type) {
 	case *resp.Object:
-		plRsp.rsp = rsp.(*resp.Object)
+		plRsp.obj = rsp.(*resp.Object)
 	case error:
 		err = rsp.(error)
 		plRsp.err = err
@@ -205,7 +205,7 @@ func (tr *TaskRunner) cleanupInflight(err error) {
 		plReq := e.Value.(*PipelineRequest)
 		log.Error("clean up", plReq)
 		plRsp := &PipelineResponse{
-			ctx: plReq,
+			req: plReq,
 			err: err,
 		}
 		plReq.backQ <- plRsp

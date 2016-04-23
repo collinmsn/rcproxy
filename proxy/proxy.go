@@ -13,13 +13,13 @@ var (
 
 type Proxy struct {
 	addr       string
-	dispatcher *Dispatcher
+	dispatcher *RequestDispatcher
 	slotTable  *SlotTable
 	connPool   *ConnPool
 	exitChan   chan struct{}
 }
 
-func NewProxy(addr string, dispatcher *Dispatcher, connPool *ConnPool) *Proxy {
+func NewProxy(addr string, dispatcher *RequestDispatcher, connPool *ConnPool) *Proxy {
 	p := &Proxy{
 		addr:       addr,
 		dispatcher: dispatcher,
@@ -34,7 +34,8 @@ func (p *Proxy) Exit() {
 }
 
 func (p *Proxy) handleConnection(conn net.Conn) {
-	session := NewSession(conn, p.connPool, p.dispatcher)
+	io := NewSessionReadWriter(conn)
+	session := NewSession(io, p.connPool, p.dispatcher)
 	session.Run()
 }
 

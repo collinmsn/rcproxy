@@ -32,7 +32,7 @@ var cmdTable = [][2]string{
 	{"DEBUG", "b"},
 	{"DISCARD", "b"},
 	{"DUMP", "r"},
-	{"ECHO", "b"},
+	{"ECHO", "r"},
 	{"EXEC", "b"},
 	{"EXISTS", "r"},
 	{"FLUSHALL", "b"},

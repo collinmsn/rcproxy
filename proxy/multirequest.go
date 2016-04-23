@@ -34,7 +34,7 @@ multi key cmd被拆分成numKeys个子请求按普通的pipeline request发送�
 
 请求的失败包含两种类型：1、网络失败，比如读取超时，2，请求错误，比如本来该在A机器上，请求到了B机器上，表现为response type为error
 */
-type MultiKeyCmd struct {
+type MultiRequest struct {
 	cmd               *resp.Command
 	cmdType           int
 	numSubCmds        int
@@ -42,8 +42,8 @@ type MultiKeyCmd struct {
 	subCmdRsps        []*PipelineResponse
 }
 
-func NewMultiKeyCmd(cmd *resp.Command, numSubCmds int) *MultiKeyCmd {
-	mc := &MultiKeyCmd{
+func NewMultiRequest(cmd *resp.Command, numSubCmds int) *MultiRequest {
+	mc := &MultiRequest{
 		cmd:               cmd,
 		numSubCmds:        numSubCmds,
 		numPendingSubCmds: numSubCmds,
@@ -62,16 +62,16 @@ func NewMultiKeyCmd(cmd *resp.Command, numSubCmds int) *MultiKeyCmd {
 	return mc
 }
 
-func (mc *MultiKeyCmd) OnSubCmdFinished(rsp *PipelineResponse) {
-	mc.subCmdRsps[rsp.ctx.subSeq] = rsp
+func (mc *MultiRequest) OnSubCmdFinished(rsp *PipelineResponse) {
+	mc.subCmdRsps[rsp.req.subSeq] = rsp
 	mc.numPendingSubCmds--
 }
 
-func (mc *MultiKeyCmd) Finished() bool {
+func (mc *MultiRequest) Finished() bool {
 	return mc.numPendingSubCmds == 0
 }
 
-func (mc *MultiKeyCmd) CoalesceRsp() *PipelineResponse {
+func (mc *MultiRequest) CoalesceRsp() *PipelineResponse {
 	plRsp := &PipelineResponse{}
 	var rsp *resp.Data
 	switch mc.CmdType() {
@@ -89,7 +89,7 @@ func (mc *MultiKeyCmd) CoalesceRsp() *PipelineResponse {
 			rsp = &resp.Data{T: resp.T_Error, String: []byte(subCmdRsp.err.Error())}
 			break
 		}
-		reader := bufio.NewReader(bytes.NewReader(subCmdRsp.rsp.Raw()))
+		reader := bufio.NewReader(bytes.NewReader(subCmdRsp.obj.Raw()))
 		data, err := resp.ReadData(reader)
 		if err != nil {
 			log.Errorf("re-parse response err=%s", err)
@@ -110,11 +110,11 @@ func (mc *MultiKeyCmd) CoalesceRsp() *PipelineResponse {
 			panic("invalid multi key cmd name")
 		}
 	}
-	plRsp.rsp = resp.NewObjectFromData(rsp)
+	plRsp.obj = resp.NewObjectFromData(rsp)
 	return plRsp
 }
 
-func (mc *MultiKeyCmd) CmdType() int {
+func (mc *MultiRequest) CmdType() int {
 	return mc.cmdType
 }
 
