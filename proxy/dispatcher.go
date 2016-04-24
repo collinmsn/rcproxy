@@ -30,9 +30,13 @@ const (
 )
 
 var (
-	REDIS_CMD_CLUSTER_SLOTS []byte
-	REDIS_CMD_READ_ONLY     []byte
-	errEmptyClusterSlots    = errors.New("Empty cluster slots")
+	REDIS_CMD_CLUSTER_SLOTS  []byte
+	REDIS_CMD_READ_ONLY      []byte
+	errEmptyClusterSlots     = errors.New("Empty cluster slots")
+	slotNotCoveredRespObject = resp.NewObjectFromData(
+		&resp.Data{
+			T:      resp.T_Error,
+			String: []byte("slot is not covered")})
 )
 
 func init() {
@@ -60,7 +64,7 @@ type RequestDispatcher struct {
 	readPrefer     int
 }
 
-func NewDispatcher(startupNodes []string, slotReloadInterval time.Duration, connPool *ConnPool, readPrefer int) *RequestDispatcher {
+func NewRequestDispatcher(startupNodes []string, slotReloadInterval time.Duration, connPool *ConnPool, readPrefer int) *RequestDispatcher {
 	d := &RequestDispatcher{
 		startupNodes:       startupNodes,
 		slotTable:          NewSlotTable(),
@@ -104,9 +108,18 @@ func (d *RequestDispatcher) Run() {
 			}
 			taskRunner, ok := d.taskRunners[server]
 			if !ok {
-				log.Info("create task runner", server)
-				taskRunner = NewTaskRunner(server, d.connPool)
-				d.taskRunners[server] = taskRunner
+				if server == "" {
+					// slot is not covered
+					req.backQ <- &PipelineResponse{
+						req: req,
+						obj: slotNotCoveredRespObject,
+					}
+					continue
+				} else {
+					log.Info("create task runner", server)
+					taskRunner = NewTaskRunner(server, d.connPool)
+					d.taskRunners[server] = taskRunner
+				}
 			}
 			taskRunner.in <- req
 		case info := <-d.slotInfoChan:

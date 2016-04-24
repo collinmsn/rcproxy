@@ -58,7 +58,7 @@ func main() {
 	autoflags.Define(&config)
 	flag.Parse()
 	log.SetLevelByString(config.LogLevel)
-	log.SetFlags(log.Ldate | log.Lmicroseconds)
+	log.SetFlags(log.Ldate | log.Lshortfile | log.Lmicroseconds)
 	if len(config.LogFile) != 0 {
 		log.SetOutputByName(config.LogFile)
 		log.SetHighlighting(false)
@@ -90,7 +90,7 @@ func main() {
 	}
 
 	connPool := proxy.NewConnPool(config.BackendIdleConnections, config.ConnectTimeout, config.ReadPrefer != proxy.READ_PREFER_MASTER)
-	dispatcher := proxy.NewDispatcher(startupNodes, config.SlotsReloadInterval, connPool, config.ReadPrefer)
+	dispatcher := proxy.NewRequestDispatcher(startupNodes, config.SlotsReloadInterval, connPool, config.ReadPrefer)
 	if err := dispatcher.InitSlotTable(); err != nil {
 		log.Fatal(err)
 	}

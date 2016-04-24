@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	LogEveryN      uint64
+	LogEveryN      uint64 = 100
 	accessLogCount uint64
 )
 
@@ -34,7 +34,7 @@ func (p *Proxy) Exit() {
 }
 
 func (p *Proxy) handleConnection(conn net.Conn) {
-	io := NewSessionReadWriter(conn)
+	io := NewClientSessionReadWriter(conn)
 	session := NewSession(io, p.connPool, p.dispatcher)
 	session.Run()
 }

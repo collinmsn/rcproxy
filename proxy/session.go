@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"gopkg.in/fatih/pool.v2"
 
@@ -22,7 +23,7 @@ var (
 	BLACK_CMD_ERR = []byte("unsupported command")
 )
 
-type RespReadWriter interface {
+type ClientReadWriter interface {
 	ReadCommand() (*resp.Command, error)
 	WriteObject(*resp.Object) error
 	Close() error
@@ -33,27 +34,26 @@ type RespReadWriter interface {
 * SessionReadWriter负责client端读写,
 * 写出没有使用buffer io
  */
-type SessionReadWriter struct {
+type ClientSessionReadWriter struct {
 	net.Conn
 	reader *bufio.Reader
 }
 
-func NewSessionReadWriter(conn net.Conn) *SessionReadWriter {
-	return &SessionReadWriter{
-		Conn: conn,
-		// TODO: tune buffer size
+func NewClientSessionReadWriter(conn net.Conn) *ClientSessionReadWriter {
+	return &ClientSessionReadWriter{
+		Conn:   conn,
 		reader: bufio.NewReader(conn),
 	}
 }
 
-func (s *SessionReadWriter) ReadCommand() (cmd *resp.Command, err error) {
+func (s *ClientSessionReadWriter) ReadCommand() (cmd *resp.Command, err error) {
 	if cmd, err = resp.ReadCommand(s.reader); err != nil {
 		log.Error("read from client", err, s.RemoteAddr())
 	}
 	return
 }
 
-func (s *SessionReadWriter) WriteObject(obj *resp.Object) (err error) {
+func (s *ClientSessionReadWriter) WriteObject(obj *resp.Object) (err error) {
 	if _, err = s.Write(obj.Raw()); err != nil {
 		log.Error("write to client", err, s.RemoteAddr())
 	}
@@ -65,7 +65,7 @@ func (s *SessionReadWriter) WriteObject(obj *resp.Object) (err error) {
 // since requests are sent to different backends, response may come back unordered
 // a heap is used to reorder the pipeline responses
 type Session struct {
-	io         RespReadWriter
+	io         ClientReadWriter
 	reqSeq     int64
 	ackSeq     int64
 	rspCh      chan *PipelineResponse
@@ -76,7 +76,7 @@ type Session struct {
 	dispatcher Dispatcher
 }
 
-func NewSession(io RespReadWriter, connPool *ConnPool, dispatcher Dispatcher) *Session {
+func NewSession(io ClientReadWriter, connPool *ConnPool, dispatcher Dispatcher) *Session {
 	session := &Session{
 		io:         io,
 		rspCh:      make(chan *PipelineResponse, 1000),
@@ -181,6 +181,9 @@ func (s *Session) handleRespMulti(plRsp *PipelineResponse) error {
 		obj = parentCmd.CoalesceRsp().obj
 	} else {
 		obj = plRsp.obj
+	}
+	if n := atomic.AddUint64(&accessLogCount, 1); n%LogEveryN == 0 {
+		log.Info("access", s.io.RemoteAddr(), plRsp.req.cmd.Args[:2])
 	}
 	return s.io.WriteObject(obj)
 }
