@@ -57,7 +57,7 @@ type RequestDispatcher struct {
 	slotReloadInterval time.Duration
 	reqCh              chan *PipelineRequest
 	connPool           *ConnPool
-	taskRunners        map[string]*TaskRunner
+	backends           map[string]*Backend
 	// notify slots changed
 	slotInfoChan   chan []*SlotInfo
 	slotReloadChan chan struct{}
@@ -71,7 +71,7 @@ func NewRequestDispatcher(startupNodes []string, slotReloadInterval time.Duratio
 		slotReloadInterval: slotReloadInterval,
 		reqCh:              make(chan *PipelineRequest, 10000),
 		connPool:           connPool,
-		taskRunners:        make(map[string]*TaskRunner),
+		backends:           make(map[string]*Backend),
 		slotInfoChan:       make(chan []*SlotInfo),
 		slotReloadChan:     make(chan struct{}, 1),
 		readPrefer:         readPrefer,
@@ -106,7 +106,7 @@ func (d *RequestDispatcher) Run() {
 			} else {
 				server = d.slotTable.WriteServer(req.slot)
 			}
-			taskRunner, ok := d.taskRunners[server]
+			backend, ok := d.backends[server]
 			if !ok {
 				if server == "" {
 					// slot is not covered
@@ -116,12 +116,13 @@ func (d *RequestDispatcher) Run() {
 					}
 					continue
 				} else {
-					log.Info("create task runner", server)
-					taskRunner = NewTaskRunner(server, d.connPool)
-					d.taskRunners[server] = taskRunner
+					log.Info("create backend", server)
+					backend = NewBackend(server, d.connPool, 5)
+					backend.Start()
+					d.backends[server] = backend
 				}
 			}
-			taskRunner.in <- req
+			backend.Schedule(req)
 		case info := <-d.slotInfoChan:
 			d.handleSlotInfoChanged(info)
 		}
@@ -139,11 +140,11 @@ func (d *RequestDispatcher) handleSlotInfoChanged(slotInfos []*SlotInfo) {
 		}
 	}
 
-	for server, tr := range d.taskRunners {
+	for server, backend := range d.backends {
 		if _, ok := newServers[server]; !ok {
-			log.Info("exit unused task runner", server)
-			tr.Exit()
-			delete(d.taskRunners, server)
+			log.Info("exit unused backend", server)
+			backend.Stop()
+			delete(d.backends, server)
 		}
 	}
 }
