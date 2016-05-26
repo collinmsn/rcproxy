@@ -1,13 +1,12 @@
 package proxy
 
 import (
-	"bufio"
 	"errors"
 	"net"
 	"sync"
 	"time"
 
-	"github.com/collinmsn/resp"
+	resp "github.com/collinmsn/stvpresp"
 	log "github.com/ngaut/logging"
 	"gopkg.in/fatih/pool.v2"
 )
@@ -59,20 +58,19 @@ func (cp *ConnPool) postConnect(conn net.Conn, err error) (net.Conn, error) {
 		}
 	}()
 
-	if _, err = conn.Write(REDIS_CMD_READ_ONLY); err != nil {
+	if _, err = conn.Write(resp.NewCommand("READONLY")); err != nil {
 		log.Error("write READONLY failed", conn.RemoteAddr().String(), err)
 		return conn, err
 	}
 
-	var data *resp.Data
-	reader := bufio.NewReader(conn)
-	data, err = resp.ReadData(reader)
+	reader := resp.NewReader(conn)
+	obj, err := reader.ReadObject()
 	if err != nil {
 		log.Error("read READONLY resp failed", conn.RemoteAddr().String(), err)
 		return conn, err
 	}
 
-	if data.T == resp.T_Error {
+	if buf := obj.Raw(); len(buf) > 0 && buf[0] == resp.ERROR_PREFIX {
 		log.Error("READONLY resp is not OK", conn.RemoteAddr().String())
 		err = errors.New("post connect error: READONLY resp is not OK")
 	}

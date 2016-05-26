@@ -154,31 +154,34 @@ func (tr *TaskRunner) handleReq(req interface{}) error {
 	return err
 }
 
-func (tr *TaskRunner) handleResp(rsp interface{}) error {
-	if tr.inflight.Len() == 0 {
-		// this would occur when reader returned from blocking reading
-		log.Info("no inflight requests", rsp)
-		if err, ok := rsp.(error); ok {
-			return err
-		} else {
-			return nil
+func (tr *TaskRunner) handleResp(rsp interface{}) (err error) {
+	panic("not implemented")
+	/*
+		if tr.inflight.Len() == 0 {
+			// this would occur when reader returned from blocking reading
+			log.Info("no inflight requests", rsp)
+			if err, ok := rsp.(error); ok {
+				return err
+			} else {
+				return nil
+			}
 		}
-	}
 
-	plReq := tr.inflight.Remove(tr.inflight.Front()).(*PipelineRequest)
-	plRsp := &PipelineResponse{
-		req: plReq,
-	}
-	var err error
-	switch rsp.(type) {
-	case *resp.Object:
-		plRsp.obj = rsp.(*resp.Object)
-	case error:
-		err = rsp.(error)
-		plRsp.err = err
-	}
-	plReq.backQ <- plRsp
-	return err
+		plReq := tr.inflight.Remove(tr.inflight.Front()).(*PipelineRequest)
+		plRsp := &PipelineResponse{
+			req: plReq,
+		}
+		var err error
+		switch rsp.(type) {
+		case *resp.Object:
+			plRsp.obj = rsp.(*resp.Object)
+		case error:
+			err = rsp.(error)
+			plRsp.err = err
+		}
+		plReq.backQ <- plRsp
+	*/
+	return
 }
 
 func (tr *TaskRunner) tryRecover(err error) error {
@@ -227,27 +230,31 @@ func (tr *TaskRunner) cleanupReqQueue() {
 }
 
 func (tr *TaskRunner) writeToBackend(plReq *PipelineRequest) error {
-	var err error
-	// always put req into inflight list first
-	tr.inflight.PushBack(plReq)
+	panic("not implemented")
+	return nil
+	/*
+		var err error
+		// always put req into inflight list first
+		tr.inflight.PushBack(plReq)
 
-	if tr.w == nil {
-		err = initTaskRunnerConnErr
-		log.Error(err)
-		return err
-	}
-	buf := plReq.cmd.Format()
-	if _, err = tr.w.Write(buf); err != nil {
-		log.Error(err)
-		return err
-	}
-	if len(tr.in) == 0 {
-		err = tr.w.Flush()
-		if err != nil {
-			log.Error("flush error", err)
+		if tr.w == nil {
+			err = initTaskRunnerConnErr
+			log.Error(err)
+			return err
 		}
-	}
-	return err
+		buf := plReq.cmd.Raw()
+		if _, err = tr.w.Write(buf); err != nil {
+			log.Error(err)
+			return err
+		}
+		if len(tr.in) == 0 {
+			err = tr.w.Flush()
+			if err != nil {
+				log.Error("flush error", err)
+			}
+		}
+		return err
+	*/
 }
 
 func (tr *TaskRunner) initRWConn(conn net.Conn) {

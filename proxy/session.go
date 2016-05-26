@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bufio"
 	"bytes"
 	"container/heap"
 	"net"
@@ -10,9 +9,12 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/CodisLabs/codis/pkg/proxy/redis"
 	"gopkg.in/fatih/pool.v2"
 
-	"github.com/collinmsn/resp"
+	"bufio"
+
+	resp "github.com/collinmsn/stvpresp"
 	log "github.com/ngaut/logging"
 )
 
@@ -24,8 +26,8 @@ var (
 )
 
 type ClientReadWriter interface {
-	ReadCommand() (*resp.Command, error)
-	WriteObject(*resp.Object) error
+	ReadCommand() (*redis.Resp, error)
+	WriteObject(*redis.Resp) error
 	Close() error
 	RemoteAddr() net.Addr
 }
@@ -36,25 +38,28 @@ type ClientReadWriter interface {
  */
 type ClientSessionReadWriter struct {
 	net.Conn
-	reader *bufio.Reader
+	reader *redis.Decoder
+	writer *redis.Encoder
 }
 
 func NewClientSessionReadWriter(conn net.Conn) *ClientSessionReadWriter {
 	return &ClientSessionReadWriter{
 		Conn:   conn,
-		reader: bufio.NewReader(conn),
+		reader: redis.NewDecoder(bufio.NewReader(conn)),
+		writer: redis.NewEncoder(bufio.NewWriter(conn)),
 	}
 }
 
-func (s *ClientSessionReadWriter) ReadCommand() (cmd *resp.Command, err error) {
-	if cmd, err = resp.ReadCommand(s.reader); err != nil {
+func (s *ClientSessionReadWriter) ReadCommand() (cmd *redis.Resp, err error) {
+	cmd, err = s.reader.Decode()
+	if err != nil {
 		log.Error("read from client", err, s.RemoteAddr())
 	}
 	return
 }
 
-func (s *ClientSessionReadWriter) WriteObject(obj *resp.Object) (err error) {
-	if _, err = s.Write(obj.Raw()); err != nil {
+func (s *ClientSessionReadWriter) WriteObject(obj *redis.Resp) (err error) {
+	if err = s.writer.Encode(obj, true); err != nil {
 		log.Error("write to client", err, s.RemoteAddr())
 	}
 	return
@@ -79,7 +84,7 @@ type Session struct {
 func NewSession(io ClientReadWriter, connPool *ConnPool, dispatcher Dispatcher) *Session {
 	session := &Session{
 		io:         io,
-		rspCh:      make(chan *PipelineResponse, 1000),
+		rspCh:      make(chan *PipelineResponse, 10000),
 		closeWg:    &WaitGroupWrapper{},
 		reqWg:      &sync.WaitGroup{},
 		connPool:   connPool,
@@ -138,20 +143,18 @@ func (s *Session) ReadingLoop() {
 			break
 		}
 
-		// convert all command name to upper case
-		cmd.Args[0] = strings.ToUpper(cmd.Args[0])
+		op := string(bytes.ToUpper(cmd.Array[0].Value))
 
 		// check if command is supported
-		cmdFlag := CmdFlag(cmd)
+		cmdFlag := CmdFlag(op)
 		if cmdFlag&CMD_FLAG_BLACK != 0 {
 			plReq := &PipelineRequest{
 				seq: s.advanceReqSeq(),
 				wg:  s.reqWg,
 			}
 			s.reqWg.Add(1)
-			rsp := &resp.Data{T: resp.T_Error, String: BLACK_CMD_ERR}
 			plRsp := &PipelineResponse{
-				obj: resp.NewObjectFromData(rsp),
+				obj: redis.NewError(BLACK_CMD_ERR),
 				req: plReq,
 			}
 			s.rspCh <- plRsp
@@ -159,8 +162,8 @@ func (s *Session) ReadingLoop() {
 		}
 
 		// check if is multi key cmd
-		if yes, numKeys := IsMultiCmd(cmd); yes && numKeys > 1 {
-			s.handleMultiKeyCmd(cmd, numKeys)
+		if yes, numKeys := IsMultiCmd(op, cmd); yes && numKeys > 1 {
+			s.handleMultiKeyCmd(cmd, op, numKeys)
 		} else {
 			s.handleGenericCmd(cmd, cmdFlag)
 		}
@@ -170,7 +173,7 @@ func (s *Session) ReadingLoop() {
 
 // 将resp写出去。如果是multi key command，只有在全部完成后才汇总输出
 func (s *Session) handleRespMulti(plRsp *PipelineResponse) error {
-	var obj *resp.Object
+	var obj *redis.Resp
 	if parentCmd := plRsp.req.parentCmd; parentCmd != nil {
 		// sub request
 		parentCmd.OnSubCmdFinished(plRsp)
@@ -183,7 +186,7 @@ func (s *Session) handleRespMulti(plRsp *PipelineResponse) error {
 		obj = plRsp.obj
 	}
 	if n := atomic.AddUint64(&accessLogCount, 1); n%LogEveryN == 0 {
-		log.Info("access", s.io.RemoteAddr(), plRsp.req.cmd.Args[:2])
+		log.Info("access", s.io.RemoteAddr(), plRsp.req.cmd)
 	}
 	return s.io.WriteObject(obj)
 }
@@ -208,26 +211,27 @@ func (s *Session) redirect(server string, plRsp *PipelineResponse, ask bool) {
 		conn.Close()
 	}()
 
-	reader := bufio.NewReader(conn)
+	writer := redis.NewEncoder(bufio.NewWriter(conn))
 	if ask {
-		if _, err = conn.Write(ASK_CMD_BYTES); err != nil {
+		if _, err = writer.Write(ASK_CMD_BYTES); err != nil {
 			plRsp.err = err
 			return
 		}
 	}
-	if _, err = conn.Write(plRsp.req.cmd.Format()); err != nil {
+
+	if err = writer.Encode(plRsp.req.cmd, true); err != nil {
 		plRsp.err = err
 		return
 	}
+	reader := redis.NewDecoder(bufio.NewReader(conn))
 	if ask {
-		if _, err = resp.ReadData(reader); err != nil {
+		if _, err = reader.Decode(); err != nil {
 			plRsp.err = err
 			return
 		}
 	}
-	obj := resp.NewObject()
-	if err = resp.ReadDataBytes(reader, obj); err != nil {
-		plRsp.err = err
+	if obj, err := reader.Decode(); err != nil {
+		plRsp.obj = redis.NewError([]byte(err.Error()))
 	} else {
 		plRsp.obj = obj
 	}
@@ -242,11 +246,12 @@ func (s *Session) handleRespRedirect(plRsp *PipelineResponse) error {
 
 	if plRsp.err != nil {
 		s.dispatcher.TriggerReloadSlots()
-		rsp := &resp.Data{T: resp.T_Error, String: []byte(plRsp.err.Error())}
-		plRsp.obj = resp.NewObjectFromData(rsp)
-	} else {
-		raw := plRsp.obj.Raw()
-		if raw[0] == resp.T_Error {
+		plRsp.obj = redis.NewError([]byte(plRsp.err.Error()))
+		plRsp.err = nil
+	} else if plRsp.obj.IsError() {
+		// TODO: check if Value contains Error prefix
+		raw := plRsp.obj.Value
+		if raw[0] == resp.ERROR_PREFIX {
 			if bytes.HasPrefix(raw, MOVED) {
 				_, server := ParseRedirectInfo(string(raw))
 				s.dispatcher.TriggerReloadSlots()
@@ -299,45 +304,47 @@ func (s *Session) handleRespPipeline(plRsp *PipelineResponse) error {
 	return nil
 }
 
-func (s *Session) handleMultiKeyCmd(cmd *resp.Command, numKeys int) {
-	var subCmd *resp.Command
-	var err error
-	mc := NewMultiRequest(cmd, numKeys)
-	// multi sub cmd share the same seq number, 在处理reorder时有利于提高效率
-	seq := s.advanceReqSeq()
-	readOnly := mc.CmdType() == MGET
-	for i := 0; i < numKeys; i++ {
-		switch mc.CmdType() {
-		case MGET:
-			subCmd, err = resp.NewCommand("GET", cmd.Value(i+1))
-		case MSET:
-			subCmd, err = resp.NewCommand("SET", cmd.Value(2*i+1), cmd.Value((2*i + 2)))
-		case DEL:
-			subCmd, err = resp.NewCommand("DEL", cmd.Value(i+1))
+func (s *Session) handleMultiKeyCmd(cmd *redis.Resp, op string, numKeys int) {
+	panic("not implemented")
+	/*
+		var subCmd resp.Command
+		var key []byte
+		mc := NewMultiRequest(cmd, op, numKeys)
+		// multi sub cmd share the same seq number, 在处理reorder时有利于提高效率
+		seq := s.advanceReqSeq()
+		readOnly := mc.CmdType() == MGET
+		for i := 0; i < numKeys; i++ {
+			switch mc.CmdType() {
+			case MGET:
+				key = args[i+1]
+				subCmd = resp.NewCommand("GET", string(args[i+1]))
+			case MSET:
+				key = args[2*i+1]
+				subCmd = resp.NewCommand("SET", string(args[2*i+1]), string(args[2*i+2]))
+			case DEL:
+				key = args[i+1]
+				subCmd = resp.NewCommand("DEL", string(args[i+1]))
+			}
+			slot := Key2Slot(key)
+			plReq := &PipelineRequest{
+				cmd:       subCmd,
+				readOnly:  readOnly,
+				slot:      slot,
+				seq:       seq,
+				subSeq:    i,
+				backQ:     s.rspCh,
+				parentCmd: mc,
+				wg:        s.reqWg,
+			}
+			s.reqWg.Add(1)
+			s.dispatcher.Schedule(plReq)
 		}
-		if err != nil {
-			panic(err)
-		}
-		key := subCmd.Value(1)
-		slot := Key2Slot(key)
-		plReq := &PipelineRequest{
-			cmd:       subCmd,
-			readOnly:  readOnly,
-			slot:      slot,
-			seq:       seq,
-			subSeq:    i,
-			backQ:     s.rspCh,
-			parentCmd: mc,
-			wg:        s.reqWg,
-		}
-		s.reqWg.Add(1)
-		s.dispatcher.Schedule(plReq)
-	}
+	*/
 }
 
-func (s *Session) handleGenericCmd(cmd *resp.Command, cmdFlag int) {
-	key := cmd.Value(1)
-	slot := Key2Slot(key)
+func (s *Session) handleGenericCmd(cmd *redis.Resp, cmdFlag int) {
+	// TODO: 参数个数
+	slot := Key2Slot(cmd.Array[1].Value)
 	plReq := &PipelineRequest{
 		cmd:      cmd,
 		readOnly: cmdFlag&CMD_FLAG_READONLY != 0,

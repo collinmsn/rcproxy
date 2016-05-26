@@ -1,11 +1,12 @@
 package proxy
 
 import (
-	"bufio"
 	"container/list"
 	"net"
 
-	"github.com/collinmsn/resp"
+	"bufio"
+
+	"github.com/CodisLabs/codis/pkg/proxy/redis"
 	"github.com/fatih/pool"
 	log "github.com/ngaut/logging"
 )
@@ -15,7 +16,8 @@ type BackendSession struct {
 	requestQueue <-chan *PipelineRequest
 	notifyExit   chan<- struct{}
 	inflight     *list.List
-	out          chan *resp.Object
+	out          chan *redis.Resp
+	writer       *redis.Encoder
 }
 
 func NewBackendSession(conn net.Conn, requestQueue <-chan *PipelineRequest, notifyExit chan<- struct{}) *BackendSession {
@@ -24,7 +26,8 @@ func NewBackendSession(conn net.Conn, requestQueue <-chan *PipelineRequest, noti
 		requestQueue: requestQueue,
 		notifyExit:   notifyExit,
 		inflight:     list.New(),
-		out:          make(chan *resp.Object, 1000),
+		out:          make(chan *redis.Resp, 1000),
+		writer:       redis.NewEncoder(bufio.NewWriter(conn)),
 	}
 	return s
 }
@@ -35,15 +38,19 @@ func (s *BackendSession) Start() {
 }
 
 func (s *BackendSession) readingLoop() {
-	reader := bufio.NewReader(s.conn)
+	reader := redis.NewDecoder(bufio.NewReader(s.conn))
 	for {
-		obj := resp.NewObject()
-		if err := resp.ReadDataBytes(reader, obj); err != nil {
+		obj, err := reader.Decode()
+		if err != nil {
 			log.Error(err)
 			close(s.out)
 			return
 		} else {
-			s.out <- obj
+			select {
+			case s.out <- obj:
+			default:
+				log.Error("backendsession <-out failed")
+			}
 		}
 	}
 }
@@ -57,10 +64,7 @@ func (s *BackendSession) writingLoop() {
 		if err != nil {
 			messageForInflight = err.Error()
 		}
-		obj := resp.NewObjectFromData(&resp.Data{
-			T:      resp.T_Error,
-			String: []byte(messageForInflight),
-		})
+		obj := redis.NewError([]byte(messageForInflight))
 		for e := s.inflight.Front(); e != nil; e = e.Next() {
 			plReq := e.Value.(*PipelineRequest)
 			plRsp := &PipelineResponse{
@@ -95,14 +99,13 @@ func (s *BackendSession) handleReq(plReq *PipelineRequest) (err error) {
 	// always put req into inflight list first
 	s.inflight.PushBack(plReq)
 
-	buf := plReq.cmd.Format()
-	if _, err = s.conn.Write(buf); err != nil {
+	if err = s.writer.Encode(plReq.cmd, true); err != nil {
 		log.Error(err)
 	}
 	return
 }
 
-func (s *BackendSession) handleRsp(obj *resp.Object) {
+func (s *BackendSession) handleRsp(obj *redis.Resp) {
 	if s.inflight.Len() == 0 {
 		panic("should never happer")
 	}

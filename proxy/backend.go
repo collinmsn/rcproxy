@@ -1,12 +1,16 @@
 package proxy
 
 import (
-	"github.com/collinmsn/resp"
+	"github.com/CodisLabs/codis/pkg/proxy/redis"
 	log "github.com/ngaut/logging"
 )
 
 const (
 	BACKEND_REQUEST_QUEUE_SIZE = 5000
+)
+
+var (
+	errBackendQueueOverflow = "backend queue overflow"
 )
 
 // Backend represent a redis server, it maintains BackendSessions
@@ -36,7 +40,15 @@ func (b *Backend) Start() {
 }
 
 func (b *Backend) Schedule(plReq *PipelineRequest) {
-	b.requestQueue <- plReq
+	select {
+	case b.requestQueue <- plReq:
+	default:
+		plReq.backQ <- &PipelineResponse{
+			req: plReq,
+			obj: redis.NewError([]byte(errBackendQueueOverflow)),
+		}
+		log.Info(errBackendQueueOverflow, b.addr)
+	}
 }
 
 func (b *Backend) Stop() {
@@ -63,20 +75,19 @@ func (b *Backend) startBackendSession() {
 	conn, err := b.connPool.GetConn(b.addr)
 	if err != nil {
 		// can not connect to backend, clear pending requests to avoid blocking dispatcher
-		log.Error(err, b.addr)
-		select {
-		case req := <-b.requestQueue:
-			plRsp := &PipelineResponse{
-				obj: resp.NewObjectFromData(&resp.Data{
-					T:      resp.T_Error,
-					String: []byte(err.Error()),
-				}),
-				req: req,
+		log.Error("connect to backend", err, b.addr)
+		for {
+			select {
+			case req := <-b.requestQueue:
+				plRsp := &PipelineResponse{
+					req: req,
+					err: err,
+				}
+				req.backQ <- plRsp
+			default:
+				b.sessionExit <- struct{}{}
+				return
 			}
-			req.backQ <- plRsp
-		default:
-			b.sessionExit <- struct{}{}
-			return
 		}
 	}
 	session := NewBackendSession(conn, b.requestQueue, b.sessionExit)

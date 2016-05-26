@@ -1,19 +1,16 @@
 package proxy
 
 import (
-	"net"
 	"time"
-
-	"bufio"
 
 	"math/rand"
 	"strings"
 
 	"errors"
 
-	"github.com/collinmsn/resp"
+	"github.com/CodisLabs/codis/pkg/proxy/redis"
 	log "github.com/ngaut/logging"
-	"gopkg.in/fatih/pool.v2"
+	redisclient "gopkg.in/redis.v3"
 )
 
 // dispatcher routes requests from all clients to the right backend
@@ -30,21 +27,9 @@ const (
 )
 
 var (
-	REDIS_CMD_CLUSTER_SLOTS  []byte
-	REDIS_CMD_READ_ONLY      []byte
 	errEmptyClusterSlots     = errors.New("Empty cluster slots")
-	slotNotCoveredRespObject = resp.NewObjectFromData(
-		&resp.Data{
-			T:      resp.T_Error,
-			String: []byte("slot is not covered")})
+	slotNotCoveredRespObject = redis.NewError([]byte("slot not covered"))
 )
-
-func init() {
-	cmd, _ := resp.NewCommand("CLUSTER", "SLOTS")
-	REDIS_CMD_CLUSTER_SLOTS = cmd.Format()
-	cmd, _ = resp.NewCommand("READONLY")
-	REDIS_CMD_READ_ONLY = cmd.Format()
-}
 
 type Dispatcher interface {
 	TriggerReloadSlots()
@@ -117,7 +102,7 @@ func (d *RequestDispatcher) Run() {
 					continue
 				} else {
 					log.Info("create backend", server)
-					backend = NewBackend(server, d.connPool, 5)
+					backend = NewBackend(server, d.connPool, 1)
 					backend.Start()
 					d.backends[server] = backend
 				}
@@ -150,7 +135,11 @@ func (d *RequestDispatcher) handleSlotInfoChanged(slotInfos []*SlotInfo) {
 }
 
 func (d *RequestDispatcher) Schedule(req *PipelineRequest) {
-	d.reqCh <- req
+	select {
+	case d.reqCh <- req:
+	default:
+		log.Error("dispatch overflow")
+	}
 }
 
 // wait for the slot reload chan and reload cluster topology
@@ -202,46 +191,26 @@ func (d *RequestDispatcher) reloadTopology() (slotInfos []*SlotInfo, err error) 
 获取cluster slots信息，并利用cluster nodes信息来将failed的slave过滤掉
 */
 func (d *RequestDispatcher) doReload(server string) (slotInfos []*SlotInfo, err error) {
-	var conn net.Conn
-	conn, err = d.connPool.GetConn(server)
+	cli := redisclient.NewClusterClient(&redisclient.ClusterOptions{
+		Addrs: []string{server},
+	})
+	cmd := cli.ClusterSlots()
+	var clusterSlotInfos []redisclient.ClusterSlotInfo
+	clusterSlotInfos, err = cmd.Result()
 	if err != nil {
-		log.Error(server, err)
 		return
-	} else {
-		log.Infof("query cluster slots from %s", server)
-	}
-	defer func() {
-		if err != nil {
-			conn.(*pool.PoolConn).MarkUnusable()
-		}
-		conn.Close()
-	}()
-	_, err = conn.Write(REDIS_CMD_CLUSTER_SLOTS)
-	if err != nil {
-		log.Errorf("write cluster slots error", server, err)
-		return
-	}
-	r := bufio.NewReader(conn)
-	var data *resp.Data
-	data, err = resp.ReadData(r)
-	if err != nil {
-		log.Error(server, err)
-		return
-	}
-	if data.T == resp.T_Error {
-		err = errors.New(string(data.Format()))
-		return
-	}
-	if len(data.Array) == 0 {
+	} else if len(clusterSlotInfos) == 0 {
 		err = errEmptyClusterSlots
 		return
 	}
-	slotInfos = make([]*SlotInfo, 0, len(data.Array))
-	for _, info := range data.Array {
-		slotInfos = append(slotInfos, NewSlotInfo(info))
-	}
 
-	for _, si := range slotInfos {
+	for _, clusterSlotInfo := range clusterSlotInfos {
+		si := &SlotInfo{
+			start: clusterSlotInfo.Start,
+			end:   clusterSlotInfo.End,
+			write: clusterSlotInfo.Addrs[0],
+			read:  clusterSlotInfo.Addrs[1:],
+		}
 		if d.readPrefer == READ_PREFER_MASTER {
 			si.read = []string{si.write}
 		} else if d.readPrefer == READ_PREFER_SLAVE || d.readPrefer == READ_PREFER_SLAVE_IDC {
@@ -267,6 +236,7 @@ func (d *RequestDispatcher) doReload(server string) (slotInfos []*SlotInfo, err 
 			}
 			si.read = readNodes
 		}
+		slotInfos = append(slotInfos, si)
 	}
 	return
 }

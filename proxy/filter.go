@@ -1,9 +1,5 @@
 package proxy
 
-import (
-	"github.com/collinmsn/resp"
-)
-
 const (
 	CMD_FLAG_READONLY = 1 << iota
 	CMD_FLAG_BLACK
@@ -130,6 +126,6 @@ func init() {
 	}
 }
 
-func CmdFlag(cmd *resp.Command) int {
-	return cmdFlagMap[cmd.Name()]
+func CmdFlag(op string) int {
+	return cmdFlagMap[op]
 }

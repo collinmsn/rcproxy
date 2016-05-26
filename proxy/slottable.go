@@ -1,11 +1,6 @@
 package proxy
 
-import (
-	"bytes"
-	"fmt"
-
-	"github.com/collinmsn/resp"
-)
+import "bytes"
 
 const (
 	NumSlots                   = 16384
@@ -59,45 +54,14 @@ type SlotInfo struct {
 	read  []string
 }
 
-func NewSlotInfo(data *resp.Data) *SlotInfo {
-	/*
-	   cluster slots array element example
-	   1) 1) (integer) 10923
-	      2) (integer) 16383
-	      3) 1) "10.4.17.164"
-	         2) (integer) 7705
-	      4) 1) "10.4.17.164"
-	         2) (integer) 7708
-	*/
-	si := &SlotInfo{
-		start: int(data.Array[CLUSTER_SLOTS_START].Integer),
-		end:   int(data.Array[CLUSTER_SLOTS_END].Integer),
-	}
-	for i := CLUSTER_SLOTS_SERVER_START; i < len(data.Array); i++ {
-		host := string(data.Array[i].Array[0].String)
-		if len(host) == 0 {
-			host = "127.0.0.1"
-		}
-		port := int(data.Array[i].Array[1].Integer)
-		node := fmt.Sprintf("%s:%d", host, port)
-		if i == CLUSTER_SLOTS_SERVER_START {
-			si.write = node
-		} else {
-			si.read = append(si.read, node)
-		}
-	}
-	return si
-}
-
-func Key2Slot(key string) int {
-	buf := []byte(key)
-	if pos := bytes.IndexByte(buf, '{'); pos != -1 {
+func Key2Slot(key []byte) int {
+	if pos := bytes.IndexByte(key, '{'); pos != -1 {
 		pos += 1
-		if pos2 := bytes.IndexByte(buf[pos:], '}'); pos2 > 0 {
-			slot := CRC16(buf[pos:pos+pos2]) % NumSlots
+		if pos2 := bytes.IndexByte(key[pos:], '}'); pos2 > 0 {
+			slot := CRC16(key[pos:pos+pos2]) % NumSlots
 			return int(slot)
 		}
 	}
-	slot := CRC16(buf) % NumSlots
+	slot := CRC16(key) % NumSlots
 	return int(slot)
 }

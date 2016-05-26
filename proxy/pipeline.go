@@ -3,11 +3,11 @@ package proxy
 import (
 	"sync"
 
-	"github.com/collinmsn/resp"
+	"github.com/CodisLabs/codis/pkg/proxy/redis"
 )
 
 type PipelineRequest struct {
-	cmd *resp.Command
+	cmd *redis.Resp
 	// if it is readOnly command
 	readOnly bool
 	// key slot
@@ -24,7 +24,7 @@ type PipelineRequest struct {
 }
 
 type PipelineResponse struct {
-	obj *resp.Object
+	obj *redis.Resp
 	req *PipelineRequest
 	err error
 }
