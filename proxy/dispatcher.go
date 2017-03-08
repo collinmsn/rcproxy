@@ -16,9 +16,6 @@ import (
 	"gopkg.in/fatih/pool.v2"
 )
 
-// dispatcher routes requests from all clients to the right backend
-// it also maintains the slot table
-
 const (
 	// write commands always go to master
 	// read from master
@@ -32,7 +29,7 @@ const (
 var (
 	REDIS_CMD_CLUSTER_SLOTS  []byte
 	REDIS_CMD_READ_ONLY      []byte
-	errEmptyClusterSlots     = errors.New("Empty cluster slots")
+	errEmptyClusterSlots     = errors.New("empty cluster slots")
 	slotNotCoveredRespObject = resp.NewObjectFromData(
 		&resp.Data{
 			T:      resp.T_Error,
@@ -46,32 +43,37 @@ func init() {
 	REDIS_CMD_READ_ONLY = cmd.Format()
 }
 
+// Dispatcher routes requests from all clients to the right backend
+// it also maintains the slot table
 type Dispatcher interface {
+	InitSlotTable() error
+	Run()
+	Schedule(req *Request)
 	TriggerReloadSlots()
-	Schedule(req *PipelineRequest)
 }
 
-type RequestDispatcher struct {
+type DefaultDispatcher struct {
 	startupNodes       []string
-	slotTable          *SlotTable
 	slotReloadInterval time.Duration
-	reqCh              chan *PipelineRequest
 	connPool           *ConnPool
-	taskRunners        map[string]*TaskRunner
+	readPrefer         int
+
+	slotTable   *SlotTable
+	requestChan chan *Request
+	backends    map[string]BackendSession
 	// notify slots changed
 	slotInfoChan   chan []*SlotInfo
 	slotReloadChan chan struct{}
-	readPrefer     int
 }
 
-func NewRequestDispatcher(startupNodes []string, slotReloadInterval time.Duration, connPool *ConnPool, readPrefer int) *RequestDispatcher {
-	d := &RequestDispatcher{
+func NewDefaultDispatcher(startupNodes []string, slotReloadInterval time.Duration, connPool *ConnPool, readPrefer int) *DefaultDispatcher {
+	d := &DefaultDispatcher{
 		startupNodes:       startupNodes,
 		slotTable:          NewSlotTable(),
 		slotReloadInterval: slotReloadInterval,
-		reqCh:              make(chan *PipelineRequest, 10000),
+		requestChan:        make(chan *Request, 10000),
 		connPool:           connPool,
-		taskRunners:        make(map[string]*TaskRunner),
+		backends:           make(map[string]BackendSession),
 		slotInfoChan:       make(chan []*SlotInfo),
 		slotReloadChan:     make(chan struct{}, 1),
 		readPrefer:         readPrefer,
@@ -79,7 +81,7 @@ func NewRequestDispatcher(startupNodes []string, slotReloadInterval time.Duratio
 	return d
 }
 
-func (d *RequestDispatcher) InitSlotTable() error {
+func (d *DefaultDispatcher) InitSlotTable() error {
 	if slotInfos, err := d.reloadTopology(); err != nil {
 		return err
 	} else {
@@ -90,11 +92,11 @@ func (d *RequestDispatcher) InitSlotTable() error {
 	return nil
 }
 
-func (d *RequestDispatcher) Run() {
+func (d *DefaultDispatcher) Run() {
 	go d.slotsReloadLoop()
 	for {
 		select {
-		case req, ok := <-d.reqCh:
+		case req, ok := <-d.requestChan:
 			// dispatch req
 			if !ok {
 				log.Info("exit dispatch loop")
@@ -106,22 +108,21 @@ func (d *RequestDispatcher) Run() {
 			} else {
 				server = d.slotTable.WriteServer(req.slot)
 			}
-			taskRunner, ok := d.taskRunners[server]
+			taskRunner, ok := d.backends[server]
 			if !ok {
 				if server == "" {
 					// slot is not covered
-					req.backQ <- &PipelineResponse{
-						req: req,
-						obj: slotNotCoveredRespObject,
-					}
+					req.obj = slotNotCoveredRespObject
+					req.Done()
 					continue
 				} else {
 					log.Info("create task runner", server)
-					taskRunner = NewTaskRunner(server, d.connPool)
-					d.taskRunners[server] = taskRunner
+					taskRunner = NewDefaultBackendSession(server, d.connPool)
+					taskRunner.Start()
+					d.backends[server] = taskRunner
 				}
 			}
-			taskRunner.in <- req
+			taskRunner.Schedule(req)
 		case info := <-d.slotInfoChan:
 			d.handleSlotInfoChanged(info)
 		}
@@ -129,7 +130,7 @@ func (d *RequestDispatcher) Run() {
 }
 
 // remove unused task runner
-func (d *RequestDispatcher) handleSlotInfoChanged(slotInfos []*SlotInfo) {
+func (d *DefaultDispatcher) handleSlotInfoChanged(slotInfos []*SlotInfo) {
 	newServers := make(map[string]bool)
 	for _, si := range slotInfos {
 		d.slotTable.SetSlotInfo(si)
@@ -139,23 +140,24 @@ func (d *RequestDispatcher) handleSlotInfoChanged(slotInfos []*SlotInfo) {
 		}
 	}
 
-	for server, tr := range d.taskRunners {
+	for server, tr := range d.backends {
 		if _, ok := newServers[server]; !ok {
 			log.Info("exit unused task runner", server)
 			tr.Exit()
-			delete(d.taskRunners, server)
+			delete(d.backends, server)
 		}
 	}
 }
 
-func (d *RequestDispatcher) Schedule(req *PipelineRequest) {
-	d.reqCh <- req
+func (d *DefaultDispatcher) Schedule(req *Request) {
+	d.requestChan <- req
+	log.Debug("add to reqCh")
 }
 
 // wait for the slot reload chan and reload cluster topology
 // at most every slotReloadInterval
 // it also reload topology at a relative long periodic interval
-func (d *RequestDispatcher) slotsReloadLoop() {
+func (d *DefaultDispatcher) slotsReloadLoop() {
 	periodicReloadInterval := 300 * time.Second
 	for {
 		select {
@@ -186,7 +188,7 @@ func (d *RequestDispatcher) slotsReloadLoop() {
 
 // request "CLUSTER SLOTS" to retrieve the cluster topology
 // try each start up nodes until the first success one
-func (d *RequestDispatcher) reloadTopology() (slotInfos []*SlotInfo, err error) {
+func (d *DefaultDispatcher) reloadTopology() (slotInfos []*SlotInfo, err error) {
 	log.Info("reload slot table")
 	indexes := rand.Perm(len(d.startupNodes))
 	for _, index := range indexes {
@@ -200,7 +202,7 @@ func (d *RequestDispatcher) reloadTopology() (slotInfos []*SlotInfo, err error) 
 /**
 获取cluster slots信息，并利用cluster nodes信息来将failed的slave过滤掉
 */
-func (d *RequestDispatcher) doReload(server string) (slotInfos []*SlotInfo, err error) {
+func (d *DefaultDispatcher) doReload(server string) (slotInfos []*SlotInfo, err error) {
 	var conn net.Conn
 	conn, err = d.connPool.GetConn(server)
 	if err != nil {
@@ -273,12 +275,12 @@ func (d *RequestDispatcher) doReload(server string) (slotInfos []*SlotInfo, err 
 // schedule a reload task
 // this call is inherently throttled, so that multiple clients can call it at
 // the same time and it will only actually occur once
-func (d *RequestDispatcher) TriggerReloadSlots() {
+func (d *DefaultDispatcher) TriggerReloadSlots() {
 	select {
 	case d.slotReloadChan <- struct{}{}:
 	default:
 	}
 }
-func (d *RequestDispatcher) Exit() {
-	close(d.reqCh)
+func (d *DefaultDispatcher) Exit() {
+	close(d.requestChan)
 }

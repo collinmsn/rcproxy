@@ -90,7 +90,7 @@ func main() {
 	}
 
 	connPool := proxy.NewConnPool(config.BackendIdleConnections, config.ConnectTimeout, config.ReadPrefer != proxy.READ_PREFER_MASTER)
-	dispatcher := proxy.NewRequestDispatcher(startupNodes, config.SlotsReloadInterval, connPool, config.ReadPrefer)
+	dispatcher := proxy.NewDefaultDispatcher(startupNodes, config.SlotsReloadInterval, connPool, config.ReadPrefer)
 	if err := dispatcher.InitSlotTable(); err != nil {
 		log.Fatal(err)
 	}

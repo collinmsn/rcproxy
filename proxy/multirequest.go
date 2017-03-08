@@ -39,7 +39,7 @@ type MultiRequest struct {
 	cmdType           int
 	numSubCmds        int
 	numPendingSubCmds int
-	subCmdRsps        []*PipelineResponse
+	subCmdRsps        []*Request
 }
 
 func NewMultiRequest(cmd *resp.Command, numSubCmds int) *MultiRequest {
@@ -58,12 +58,12 @@ func NewMultiRequest(cmd *resp.Command, numSubCmds int) *MultiRequest {
 	default:
 		panic("not multi key command")
 	}
-	mc.subCmdRsps = make([]*PipelineResponse, numSubCmds)
+	mc.subCmdRsps = make([]*Request, numSubCmds)
 	return mc
 }
 
-func (mc *MultiRequest) OnSubCmdFinished(rsp *PipelineResponse) {
-	mc.subCmdRsps[rsp.req.subSeq] = rsp
+func (mc *MultiRequest) OnSubCmdFinished(req *Request) {
+	mc.subCmdRsps[req.subSeq] = req
 	mc.numPendingSubCmds--
 }
 
@@ -71,8 +71,7 @@ func (mc *MultiRequest) Finished() bool {
 	return mc.numPendingSubCmds == 0
 }
 
-func (mc *MultiRequest) CoalesceRsp() *PipelineResponse {
-	plRsp := &PipelineResponse{}
+func (mc *MultiRequest) CoalesceRsp() *resp.Object {
 	var rsp *resp.Data
 	switch mc.CmdType() {
 	case MGET:
@@ -84,12 +83,12 @@ func (mc *MultiRequest) CoalesceRsp() *PipelineResponse {
 	default:
 		panic("invalid multi key cmd name")
 	}
-	for i, subCmdRsp := range mc.subCmdRsps {
-		if subCmdRsp.err != nil {
-			rsp = &resp.Data{T: resp.T_Error, String: []byte(subCmdRsp.err.Error())}
+	for i, subReq := range mc.subCmdRsps {
+		if subReq.err != nil {
+			rsp = &resp.Data{T: resp.T_Error, String: []byte(subReq.err.Error())}
 			break
 		}
-		reader := bufio.NewReader(bytes.NewReader(subCmdRsp.obj.Raw()))
+		reader := bufio.NewReader(bytes.NewReader(subReq.obj.Raw()))
 		data, err := resp.ReadData(reader)
 		if err != nil {
 			log.Errorf("re-parse response err=%s", err)
@@ -110,8 +109,7 @@ func (mc *MultiRequest) CoalesceRsp() *PipelineResponse {
 			panic("invalid multi key cmd name")
 		}
 	}
-	plRsp.obj = resp.NewObjectFromData(rsp)
-	return plRsp
+	return resp.NewObjectFromData(rsp)
 }
 
 func (mc *MultiRequest) CmdType() int {
