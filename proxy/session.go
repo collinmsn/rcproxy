@@ -11,8 +11,9 @@ import (
 
 	"gopkg.in/fatih/pool.v2"
 
-	"github.com/collinmsn/resp"
 	"fmt"
+
+	"github.com/collinmsn/resp"
 	log "github.com/ngaut/logging"
 )
 

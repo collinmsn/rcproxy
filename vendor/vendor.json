@@ -1,0 +1,63 @@
+{
+	"comment": "",
+	"ignore": "test",
+	"package": [
+		{
+			"checksumSHA1": "LmLMEdq8YG9USf9/MpUoZKeokTY=",
+			"path": "github.com/artyom/autoflags",
+			"revision": "8d4acb53349c5f11e663d75ad9d3e54f5ce17d3c",
+			"revisionTime": "2015-06-17T10:05:51Z"
+		},
+		{
+			"checksumSHA1": "8S+PqSsKUljPWMng4hT+AMBZrzA=",
+			"path": "github.com/collinmsn/resp",
+			"revision": "9485de4066e6f7eec81e47545b3d4522274cb13c",
+			"revisionTime": "2015-04-09T07:30:09Z"
+		},
+		{
+			"checksumSHA1": "5rPfda8jFccr3A6heL+JAmi9K9g=",
+			"origin": "github.com/stretchr/testify/vendor/github.com/davecgh/go-spew/spew",
+			"path": "github.com/davecgh/go-spew/spew",
+			"revision": "c5d7a69bf8a2c9c374798160849c071093e41dd1",
+			"revisionTime": "2016-04-18T22:58:27Z"
+		},
+		{
+			"checksumSHA1": "2IZGKMD4y38B05rNQIb5tnRIpR8=",
+			"path": "github.com/garyburd/redigo/internal",
+			"revision": "785e0ca9319196b94fd61abd4c9eab5c11777377",
+			"revisionTime": "2015-01-27T01:26:49Z"
+		},
+		{
+			"checksumSHA1": "kcLMU8PuaamhBuD9LpS5Zlbn248=",
+			"path": "github.com/garyburd/redigo/redis",
+			"revision": "785e0ca9319196b94fd61abd4c9eab5c11777377",
+			"revisionTime": "2015-01-27T01:26:49Z"
+		},
+		{
+			"checksumSHA1": "YOZo0sIVeRBGXPbFnh4TGtSgO2Q=",
+			"path": "github.com/ngaut/logging",
+			"revision": "f98f5f4cd523647678af6f1726c5b5a14c9193d0",
+			"revisionTime": "2015-02-03T14:11:11Z"
+		},
+		{
+			"checksumSHA1": "zKKp5SZ3d3ycKe4EKMNT0BqAWBw=",
+			"origin": "github.com/stretchr/testify/vendor/github.com/pmezard/go-difflib/difflib",
+			"path": "github.com/pmezard/go-difflib/difflib",
+			"revision": "c5d7a69bf8a2c9c374798160849c071093e41dd1",
+			"revisionTime": "2016-04-18T22:58:27Z"
+		},
+		{
+			"checksumSHA1": "Bn333k9lTndxU3D6n/G5c+GMcYY=",
+			"path": "github.com/stretchr/testify/assert",
+			"revision": "c5d7a69bf8a2c9c374798160849c071093e41dd1",
+			"revisionTime": "2016-04-18T22:58:27Z"
+		},
+		{
+			"checksumSHA1": "1xrcK4/LiP98awGcvqTL5CClTIc=",
+			"path": "gopkg.in/fatih/pool.v2",
+			"revision": "6e328e67893eb46323ad06f0e92cb9536babbabc",
+			"revisionTime": "2017-01-11T21:10:42Z"
+		}
+	],
+	"rootPath": "github.com/collinmsn/rcproxy"
+}
