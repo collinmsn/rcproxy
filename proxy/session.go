@@ -181,7 +181,7 @@ func (s *Session) handleRespMulti(req *Request) error {
 	} else {
 		obj = req.obj
 	}
-	if n := atomic.AddUint64(&accessLogCount, 1); n%LogEveryN == 0 {
+	if n := atomic.AddUint64(&accessLogCount, 1); n%LogEveryN == 0 && len(req.cmd.Args) >= 2 {
 		log.Info("access", s.io.RemoteAddr(), req.cmd.Args[:2])
 	}
 	return s.io.WriteObject(obj)
