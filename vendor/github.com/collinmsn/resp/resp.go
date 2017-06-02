@@ -96,7 +96,9 @@ func ReadCommand(r *bufio.Reader) (*Command, error) {
 	if nil != err && !(io.EOF == err && len(buf) > 1) {
 		return nil, err
 	}
-
+	if len(buf) == 0 {
+		return nil, PROTOCOL_ERR
+	}
 	if T_Array != buf[0] {
 		return NewCommand(strings.Fields(strings.TrimSpace(string(buf)))...)
 	}

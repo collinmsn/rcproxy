@@ -1,6 +1,4 @@
 
-GOPATH := $(shell godep path):$(GOPATH)
-
 all: server
 
 server:
